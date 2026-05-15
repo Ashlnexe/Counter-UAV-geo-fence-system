@@ -22,7 +22,8 @@ class ThreatEngine:
                 "loiter_alerted": False,
                 "entry_count": 0,
                 "last_entry_alerted_count": 0,
-                "entered_zones_history": set()
+                "entered_zones_history": set(),
+                "is_new_approach": True
             }
         return self.drone_states[drone_id]
 
@@ -67,6 +68,10 @@ class ThreatEngine:
                     state["loiter_steps"] = 0
                     state["loiter_alerted"] = False
 
+            # Detect exits to reset approach status
+            if state["prev_zones"] - curr_zones:
+                state["is_new_approach"] = True
+
             # Detect new zone entries
             new_zones = curr_zones - state["prev_zones"]
             
@@ -82,8 +87,10 @@ class ThreatEngine:
                 if target_zone:
                     severity = ZONES[target_zone]["severity"]
                     
-                    # Increment for any new zone entry to properly track perimeter testing
-                    state["entry_count"] += 1
+                    # Increment only on a new approach to prevent deep intrusions from inflating the count
+                    if state["is_new_approach"]:
+                        state["entry_count"] += 1
+                        state["is_new_approach"] = False
 
                     # Threat classification priority:
                     # A. High Speed Intrusion
