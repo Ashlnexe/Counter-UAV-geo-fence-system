@@ -1,7 +1,6 @@
 import time
 import math
 import threading
-import numpy as np
 from config import BASE_LAT, BASE_LON, METERS_PER_DEGREE, SIMULATION_STEP_SECONDS
 from threat_engine import threat_engine
 
@@ -103,7 +102,7 @@ class SimulationEngine:
                     # Sine wave overlay to simulate perimeter testing
                     # Base radius 3000m, amplitude 350m, period 14 seconds
                     d.theta += (d.speed / 3000.0) * SIMULATION_STEP_SECONDS
-                    d.r = 3000.0 + 350.0 * float(np.sin(2.0 * np.pi * d.t / 14.0))
+                    d.r = 3000.0 + 350.0 * math.sin(2.0 * math.pi * d.t / 14.0)
                     d.heading = (math.degrees(d.theta) + 90) % 360
 
                 d.update_position()
