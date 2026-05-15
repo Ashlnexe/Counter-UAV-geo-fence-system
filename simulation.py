@@ -113,23 +113,28 @@ class SimulationEngine:
 
     def get_state(self):
         with self.lock:
-            return {
-                "drones": [
-                    {
-                        "id": d.id,
-                        "name": d.name,
-                        "behavior_type": d.behavior_type,
-                        "lat": d.lat,
-                        "lon": d.lon,
-                        "alt": round(d.alt, 1),
-                        "speed": round(d.speed, 1),
-                        "heading": round(d.heading, 1),
-                        "path": [pt for pt in d.path_history]
-                    }
-                    for d in self.drones
-                ],
-                "alerts": list(threat_engine.alerts)
-            }
+            drones_snapshot = [
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "behavior_type": d.behavior_type,
+                    "lat": d.lat,
+                    "lon": d.lon,
+                    "alt": round(d.alt, 1),
+                    "speed": round(d.speed, 1),
+                    "heading": round(d.heading, 1),
+                    "path": [pt for pt in d.path_history]
+                }
+                for d in self.drones
+            ]
+            
+        with threat_engine.lock:
+            alerts_snapshot = list(threat_engine.alerts)
+
+        return {
+            "drones": drones_snapshot,
+            "alerts": alerts_snapshot
+        }
 
 # Global singleton instance
 simulation_engine = SimulationEngine()

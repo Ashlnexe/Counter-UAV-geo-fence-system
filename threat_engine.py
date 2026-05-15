@@ -1,5 +1,6 @@
 import time
 import uuid
+import threading
 from config import (
     ZONES,
     LOITER_DISTANCE_THRESHOLD_M,
@@ -13,6 +14,7 @@ class ThreatEngine:
     def __init__(self):
         self.drone_states = {}
         self.alerts = []
+        self.lock = threading.Lock()
 
     def _get_drone_state(self, drone_id):
         if drone_id not in self.drone_states:
@@ -143,10 +145,11 @@ class ThreatEngine:
             "speed": round(speed, 1)
         }
         # Insert at the beginning so latest alerts are first
-        self.alerts.insert(0, alert)
-        # Keep alert history bounded to ensure performance
-        if len(self.alerts) > 200:
-            self.alerts.pop()
+        with self.lock:
+            self.alerts.insert(0, alert)
+            # Keep alert history bounded to ensure performance
+            if len(self.alerts) > 200:
+                self.alerts.pop()
 
 # Global singleton instance
 threat_engine = ThreatEngine()
