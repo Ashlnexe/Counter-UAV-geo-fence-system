@@ -64,7 +64,10 @@ class SimulationEngine:
 
     def _loop(self):
         while self.is_running:
-            self.update_step()
+            try:
+                self.update_step()
+            except Exception as e:
+                print(f"Simulation Engine Error: {e}")
             time.sleep(SIMULATION_STEP_SECONDS)
 
     def update_step(self):

@@ -82,9 +82,8 @@ class ThreatEngine:
                 if target_zone:
                     severity = ZONES[target_zone]["severity"]
                     
-                    # Check if this is a fresh transition from completely outside to inside
-                    if not state["prev_zones"]:
-                        state["entry_count"] += 1
+                    # Increment for any new zone entry to properly track perimeter testing
+                    state["entry_count"] += 1
 
                     # Threat classification priority:
                     # A. High Speed Intrusion

@@ -430,6 +430,8 @@ def update_dashboard(n):
 
     return fig, str(total_alerts), str(critical_alerts), feed_counter_text, feed_elements, telemetry_table
 
+# Initialize the simulation thread globally so it always runs
+simulation_engine.start()
+
 if __name__ == "__main__":
-    simulation_engine.start()
     app.run(debug=False, port=8050, host="0.0.0.0")
