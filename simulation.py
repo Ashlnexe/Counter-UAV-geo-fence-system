@@ -1,8 +1,10 @@
 import time
 import math
 import threading
+import random
 from config import BASE_LAT, BASE_LON, METERS_PER_DEGREE, SIMULATION_STEP_SECONDS
 from threat_engine import threat_engine
+from kalman import KalmanFilter
 
 class Drone:
     def __init__(self, drone_id, name, behavior_type, r_init, theta_init, speed):
@@ -17,11 +19,28 @@ class Drone:
         self.alt = 120.0
         self.heading = 0.0
         self.path_history = []
+        self.kf = KalmanFilter(dt=SIMULATION_STEP_SECONDS)
+        self.predicted_path = []  # future trajectory cone
         self.update_position()
 
     def update_position(self):
         self.lat = BASE_LAT + (self.r / METERS_PER_DEGREE) * math.sin(self.theta)
         self.lon = BASE_LON + (self.r / METERS_PER_DEGREE) * math.cos(self.theta)
+
+        # Convert to meters from base for Kalman
+        x_m = self.r * math.sin(self.theta)
+        y_m = self.r * math.cos(self.theta)
+
+        # Inject GPS noise — simulates real sensor uncertainty
+        x_noisy = x_m + random.gauss(0, 5.0)
+        y_noisy = y_m + random.gauss(0, 5.0)
+
+        # Run Kalman step
+        state, cov = self.kf.step(x_noisy, y_noisy)
+
+        # Project 5 seconds ahead (5 steps at 1s each)
+        self.predicted_path = self.kf.project_future(5)
+
         self.path_history.append([self.lat, self.lon])
         if len(self.path_history) > 50:
             self.path_history.pop(0)
@@ -122,7 +141,8 @@ class SimulationEngine:
                     "alt": round(d.alt, 1),
                     "speed": round(d.speed, 1),
                     "heading": round(d.heading, 1),
-                    "path": [pt for pt in d.path_history]
+                    "path": [pt for pt in d.path_history],
+                    "predicted_path": [pt for pt in d.predicted_path]
                 }
                 for d in self.drones
             ]

@@ -1,6 +1,6 @@
 from dash import Dash, html, dcc, Input, Output
 import plotly.graph_objects as go
-from config import BASE_LAT, BASE_LON, ZONES
+from config import BASE_LAT, BASE_LON, ZONES, METERS_PER_DEGREE
 from geofence import geofence_manager
 from simulation import simulation_engine
 
@@ -285,6 +285,43 @@ def update_dashboard(n):
                 hoverinfo="none",
                 showlegend=False
             ))
+
+    # Add Kalman predicted trajectory + uncertainty cone
+    for d in drones:
+        predicted = d.get("predicted_path", [])
+        if not predicted:
+            continue
+
+        pred_lats = []
+        pred_lons = []
+        cone_lats = []
+        cone_lons = []
+
+        for (px, py, sigma) in predicted:
+            # Convert meters back to lat/lon
+            lat = BASE_LAT + (py / METERS_PER_DEGREE)
+            lon = BASE_LON + (px / METERS_PER_DEGREE)
+            pred_lats.append(lat)
+            pred_lons.append(lon)
+
+            # Uncertainty radius in degrees
+            sigma_deg = sigma / METERS_PER_DEGREE
+            cone_lats.append(lat)
+            cone_lons.append(lon)
+
+        color = DRONE_COLORS.get(d["id"], "#ffffff")
+
+        # Predicted path line — dashed look via opacity
+        fig.add_trace(go.Scattermapbox(
+            mode="lines+markers",
+            lon=pred_lons,
+            lat=pred_lats,
+            line=dict(width=1, color=color),
+            marker=dict(size=4, color=color, opacity=0.4),
+            opacity=0.35,
+            hoverinfo="none",
+            showlegend=False
+        ))
 
     # Add Live Target Markers
     curr_lats = [d["lat"] for d in drones]
