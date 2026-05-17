@@ -86,6 +86,8 @@ class SimulationEngine:
                 self.update_step()
             except Exception as e:
                 print(f"Simulation Engine Error: {e}")
+                import traceback
+                traceback.print_exc()
             time.sleep(SIMULATION_STEP_SECONDS)
 
     def update_step(self):
