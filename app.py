@@ -1,18 +1,52 @@
+# =============================================================================
+# app.py — Dash dashboard for Counter-UAV Geo-Fence Monitoring System
+# =============================================================================
+
 from dash import Dash, html, dcc, Input, Output
 import plotly.graph_objects as go
-from config import BASE_LAT, BASE_LON, ZONES, METERS_PER_DEGREE
+
+from config import BASE_LAT, BASE_LON, ZONES
 from geofence import geofence_manager
 from simulation import simulation_engine
 
-app = Dash(__name__, title="Counter-UAV Geo-fence IDS")
+app = Dash(__name__, title="Counter-UAV Geo-Fence Monitor")
 
-# Distinct vibrant color mapping for premium presentation
+# Per-drone accent colours
 DRONE_COLORS = {
-    "UAV-01": "#00f2ff", # Cyan Accent
-    "UAV-02": "#ff9f1a", # Vibrant Orange
-    "UAV-03": "#ff2a2a", # Urgent Red
-    "UAV-04": "#bc13fe", # Electric Purple
+    "UAV-01": "#00f2ff",   # Cyan
+    "UAV-02": "#ff9f1a",   # Orange
+    "UAV-03": "#ff2a2a",   # Red
+    "UAV-04": "#bc13fe",   # Purple
 }
+
+# =============================================================================
+# Helpers (must be defined before layout)
+# =============================================================================
+
+def _panel_style() -> dict:
+    return {
+        "backgroundColor": "rgba(20,27,45,0.6)",
+        "border": "1px solid rgba(255,255,255,0.08)",
+        "borderRadius": "10px",
+        "padding": "15px",
+        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)",
+    }
+
+
+def _kpi_card(element_id: str, label: str, default: str, color: str) -> html.Div:
+    return html.Div(
+        style={"flex": "1", **_panel_style()},
+        children=[
+            html.Div(label, style={"fontSize": "12px", "color": "#94a3b8", "fontWeight": "600"}),
+            html.Div(id=element_id, children=default,
+                     style={"fontSize": "28px", "fontWeight": "bold", "color": color, "marginTop": "5px"}),
+        ]
+    )
+
+
+# =============================================================================
+# Layout
+# =============================================================================
 
 app.layout = html.Div(
     style={
@@ -22,468 +56,385 @@ app.layout = html.Div(
         "minHeight": "100vh",
         "padding": "20px",
         "boxSizing": "border-box",
-        "overflowX": "hidden"
+        "overflowX": "hidden",
     },
     children=[
-        # Top Header Banner
+
+        # ── Header ────────────────────────────────────────────────────────────
         html.Div(
             style={
                 "display": "flex",
                 "justifyContent": "space-between",
                 "alignItems": "center",
-                "borderBottom": "1px solid rgba(255, 255, 255, 0.1)",
+                "borderBottom": "1px solid rgba(255,255,255,0.1)",
                 "paddingBottom": "15px",
-                "marginBottom": "20px"
+                "marginBottom": "20px",
             },
             children=[
                 html.Div([
                     html.H1(
-                        "🛡️ COUNTER-UAV GEO-FENCE IDS",
+                        "🛡️ COUNTER-UAV GEO-FENCE MONITOR",
                         style={
                             "margin": 0,
-                            "fontSize": "28px",
+                            "fontSize": "26px",
                             "fontWeight": "800",
                             "letterSpacing": "1px",
                             "color": "#00f2ff",
-                            "textShadow": "0 0 10px rgba(0, 242, 255, 0.3)"
+                            "textShadow": "0 0 10px rgba(0,242,255,0.3)",
                         }
                     ),
                     html.Div(
-                        "Real-time Multi-Zone Aerial Threat Tracking & Kinematics Engine",
-                        style={
-                            "fontSize": "13px",
-                            "color": "#94a3b8",
-                            "marginTop": "4px",
-                            "textTransform": "uppercase",
-                            "letterSpacing": "0.5px"
-                        }
-                    )
+                        "Kalman-filtered multi-zone aerial threat tracking  |  Bengaluru 12.97°N 77.59°E",
+                        style={"fontSize": "12px", "color": "#94a3b8", "marginTop": "4px"}
+                    ),
                 ]),
-                # Live Indicator Badge
                 html.Div(
                     style={
-                        "display": "flex",
-                        "alignItems": "center",
-                        "backgroundColor": "rgba(16, 185, 129, 0.1)",
+                        "display": "flex", "alignItems": "center",
+                        "backgroundColor": "rgba(16,185,129,0.1)",
                         "border": "1px solid #10b981",
-                        "padding": "6px 12px",
-                        "borderRadius": "20px"
+                        "padding": "6px 14px", "borderRadius": "20px",
                     },
                     children=[
-                        html.Div(
-                            style={
-                                "width": "8px",
-                                "height": "8px",
-                                "backgroundColor": "#10b981",
-                                "borderRadius": "50%",
-                                "marginRight": "8px",
-                                "boxShadow": "0 0 8px #10b981"
-                            }
-                        ),
-                        html.Span(
-                            "SYSTEM LIVE",
-                            style={
-                                "fontSize": "12px",
-                                "fontWeight": "bold",
-                                "color": "#10b981",
-                                "letterSpacing": "1px"
-                            }
-                        )
-                    ]
-                )
-            ]
-        ),
-
-        # KPI Metrics Row
-        html.Div(
-            style={
-                "display": "flex",
-                "gap": "20px",
-                "marginBottom": "20px"
-            },
-            children=[
-                # Card 1: Active Tracked Drones
-                html.Div(
-                    style={
-                        "flex": "1",
-                        "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                        "border": "1px solid rgba(255, 255, 255, 0.08)",
-                        "borderRadius": "10px",
-                        "padding": "15px",
-                        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)"
-                    },
-                    children=[
-                        html.Div("TRACKED AERIAL TARGETS", style={"fontSize": "12px", "color": "#94a3b8", "fontWeight": "600"}),
-                        html.Div(id="kpi-active-drones", children="4", style={"fontSize": "28px", "fontWeight": "bold", "color": "#00f2ff", "marginTop": "5px"})
-                    ]
-                ),
-                # Card 2: Total Alerts Triggered
-                html.Div(
-                    style={
-                        "flex": "1",
-                        "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                        "border": "1px solid rgba(255, 255, 255, 0.08)",
-                        "borderRadius": "10px",
-                        "padding": "15px",
-                        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)"
-                    },
-                    children=[
-                        html.Div("TOTAL ALERTS GENERATED", style={"fontSize": "12px", "color": "#94a3b8", "fontWeight": "600"}),
-                        html.Div(id="kpi-total-alerts", children="0", style={"fontSize": "28px", "fontWeight": "bold", "color": "#ff9f1a", "marginTop": "5px"})
-                    ]
-                ),
-                # Card 3: Critical Incidents
-                html.Div(
-                    style={
-                        "flex": "1",
-                        "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                        "border": "1px solid rgba(255, 255, 255, 0.08)",
-                        "borderRadius": "10px",
-                        "padding": "15px",
-                        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)"
-                    },
-                    children=[
-                        html.Div("CRITICAL EXCLUSION BREACHES", style={"fontSize": "12px", "color": "#94a3b8", "fontWeight": "600"}),
-                        html.Div(id="kpi-critical-alerts", children="0", style={"fontSize": "28px", "fontWeight": "bold", "color": "#ff2a2a", "marginTop": "5px"})
+                        html.Div(style={
+                            "width": "8px", "height": "8px",
+                            "backgroundColor": "#10b981", "borderRadius": "50%",
+                            "marginRight": "8px", "boxShadow": "0 0 8px #10b981",
+                        }),
+                        html.Span("SYSTEM LIVE", style={
+                            "fontSize": "12px", "fontWeight": "bold",
+                            "color": "#10b981", "letterSpacing": "1px",
+                        }),
                     ]
                 ),
             ]
         ),
 
-        # Main Workspace: Map (Left 70%) + Scrolling Threat Feed (Right 30%)
+        # ── KPI Cards ─────────────────────────────────────────────────────────
         html.Div(
-            style={
-                "display": "flex",
-                "gap": "20px",
-                "alignItems": "stretch"
-            },
+            style={"display": "flex", "gap": "20px", "marginBottom": "20px"},
             children=[
-                # Left Panel: Live Scattermapbox Container
+                _kpi_card("kpi-active-drones",  "TRACKED AERIAL TARGETS",   "4",  "#00f2ff"),
+                _kpi_card("kpi-total-alerts",   "TOTAL ALERTS GENERATED",   "0",  "#ff9f1a"),
+                _kpi_card("kpi-critical-alerts","CRITICAL EXCLUSION BREACHES","0", "#ff2a2a"),
+            ]
+        ),
+
+        # ── Map + Feed ────────────────────────────────────────────────────────
+        html.Div(
+            style={"display": "flex", "gap": "20px", "alignItems": "stretch"},
+            children=[
+
+                # Left: tactical map
                 html.Div(
                     style={
                         "flex": "7",
-                        "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                        "border": "1px solid rgba(255, 255, 255, 0.08)",
-                        "borderRadius": "10px",
-                        "padding": "15px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)"
+                        **_panel_style(),
+                        "display": "flex", "flexDirection": "column",
                     },
                     children=[
                         html.Div(
-                            style={"display": "flex", "justifyContent": "space-between", "marginBottom": "10px", "alignItems": "center"},
+                            style={"display": "flex", "justifyContent": "space-between",
+                                   "marginBottom": "10px", "alignItems": "center"},
                             children=[
-                                html.Div("🛰️ TACTICAL RADAR VIEW", style={"fontSize": "14px", "fontWeight": "bold", "color": "#e2e8f0"}),
-                                html.Div("Center: Bengaluru (12.97°N, 77.59°E)", style={"fontSize": "11px", "color": "#64748b"})
+                                html.Div("🛰️ TACTICAL RADAR VIEW",
+                                         style={"fontSize": "14px", "fontWeight": "bold", "color": "#e2e8f0"}),
+                                html.Div(
+                                    [
+                                        html.Span("── ", style={"color": "#ffffff", "opacity": "0.4"}),
+                                        html.Span("Raw GPS   ", style={"color": "#ffffff", "opacity": "0.4", "fontSize": "11px"}),
+                                        html.Span("── ", style={"color": "#00f2ff"}),
+                                        html.Span("Kalman filtered", style={"color": "#00f2ff", "fontSize": "11px"}),
+                                    ]
+                                ),
                             ]
                         ),
                         dcc.Graph(
                             id="radar-map",
                             style={"height": "65vh", "width": "100%"},
-                            config={"displayModeBar": False}
-                        )
+                            config={"displayModeBar": False},
+                        ),
                     ]
                 ),
 
-                # Right Panel: Live Scrolling Threat Feed
+                # Right: threat log
                 html.Div(
                     style={
                         "flex": "3",
-                        "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                        "border": "1px solid rgba(255, 255, 255, 0.08)",
-                        "borderRadius": "10px",
-                        "padding": "15px",
-                        "display": "flex",
-                        "flexDirection": "column",
-                        "boxShadow": "0 4px 20px rgba(0,0,0,0.3)",
-                        "height": "calc(65vh + 37px)",
-                        "boxSizing": "border-box"
+                        **_panel_style(),
+                        "display": "flex", "flexDirection": "column",
+                        "height": "calc(65vh + 37px)", "boxSizing": "border-box",
                     },
                     children=[
                         html.Div(
-                            style={"display": "flex", "justifyContent": "space-between", "marginBottom": "10px", "alignItems": "center"},
+                            style={"display": "flex", "justifyContent": "space-between",
+                                   "marginBottom": "10px", "alignItems": "center"},
                             children=[
-                                html.Div("🚨 REAL-TIME THREAT LOG", style={"fontSize": "14px", "fontWeight": "bold", "color": "#e2e8f0"}),
-                                html.Div(id="feed-counter", children="0 Events", style={"fontSize": "11px", "color": "#00f2ff", "backgroundColor": "rgba(0, 242, 255, 0.1)", "padding": "2px 6px", "borderRadius": "10px"})
+                                html.Div("🚨 REAL-TIME THREAT LOG",
+                                         style={"fontSize": "14px", "fontWeight": "bold", "color": "#e2e8f0"}),
+                                html.Div(id="feed-counter", children="0 Events",
+                                         style={"fontSize": "11px", "color": "#00f2ff",
+                                                "backgroundColor": "rgba(0,242,255,0.1)",
+                                                "padding": "2px 6px", "borderRadius": "10px"}),
                             ]
                         ),
-                        # Scrollable Alert Feed Container
                         html.Div(
                             id="alert-feed-container",
                             style={
-                                "flex": "1",
-                                "overflowY": "auto",
-                                "display": "flex",
-                                "flexDirection": "column",
-                                "gap": "10px",
-                                "paddingRight": "5px"
+                                "flex": "1", "overflowY": "auto",
+                                "display": "flex", "flexDirection": "column",
+                                "gap": "10px", "paddingRight": "5px",
                             },
                             children=[
-                                html.Div(
-                                    "Awaiting target detections...",
-                                    style={"color": "#64748b", "fontStyle": "italic", "textAlign": "center", "marginTop": "20px", "fontSize": "13px"}
-                                )
+                                html.Div("Awaiting target detections...",
+                                         style={"color": "#64748b", "fontStyle": "italic",
+                                                "textAlign": "center", "marginTop": "20px",
+                                                "fontSize": "13px"})
                             ]
-                        )
+                        ),
                     ]
-                )
+                ),
             ]
         ),
 
-        # Drones Info List / State Table Row below map
+        # ── Telemetry table ───────────────────────────────────────────────────
         html.Div(
-            style={
-                "marginTop": "20px",
-                "backgroundColor": "rgba(20, 27, 45, 0.6)",
-                "border": "1px solid rgba(255, 255, 255, 0.08)",
-                "borderRadius": "10px",
-                "padding": "15px",
-                "boxShadow": "0 4px 20px rgba(0,0,0,0.3)"
-            },
+            style={"marginTop": "20px", **_panel_style()},
             children=[
-                html.Div("📋 TARGET TELEMETRY ROSTER", style={"fontSize": "14px", "fontWeight": "bold", "color": "#e2e8f0", "marginBottom": "12px"}),
-                html.Div(id="telemetry-table-container")
+                html.Div("📋 TARGET TELEMETRY ROSTER",
+                         style={"fontSize": "14px", "fontWeight": "bold",
+                                "color": "#e2e8f0", "marginBottom": "12px"}),
+                html.Div(id="telemetry-table-container"),
             ]
         ),
 
-        # Polling Interval: Polling reactive update state every 1.0 second
-        dcc.Interval(id="live-interval", interval=1000, n_intervals=0)
+        dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
     ]
 )
 
-def uncertainty_circle(lat, lon, radius_deg, points=8):
-    """Returns lat/lon lists forming a rough circle."""
-    import math
-    lats, lons = [], []
-    for i in range(points + 1):
-        angle = 2 * math.pi * i / points
-        lats.append(lat + radius_deg * math.sin(angle))
-        lons.append(lon + radius_deg * math.cos(angle))
-    return lats, lons
+
+# =============================================================================
+# Callbacks
+# =============================================================================
 
 @app.callback(
-    Output("radar-map", "figure"),
-    Output("kpi-total-alerts", "children"),
-    Output("kpi-critical-alerts", "children"),
-    Output("feed-counter", "children"),
-    Output("alert-feed-container", "children"),
-    Output("telemetry-table-container", "children"),
-    Input("live-interval", "n_intervals")
+    Output("radar-map",               "figure"),
+    Output("kpi-total-alerts",        "children"),
+    Output("kpi-critical-alerts",     "children"),
+    Output("feed-counter",            "children"),
+    Output("alert-feed-container",    "children"),
+    Output("telemetry-table-container","children"),
+    Input("live-interval",            "n_intervals"),
 )
 def update_dashboard(n):
-    state = simulation_engine.get_state()
+    state  = simulation_engine.get_state()
     drones = state["drones"]
     alerts = state["alerts"]
 
-    # 1. Build Tactically Accurate Mapbox Figure
+    fig = _build_map(drones)
+
+    total_alerts    = len(alerts)
+    critical_alerts = sum(1 for a in alerts if a["severity"] == "CRITICAL")
+    feed_elements   = _build_feed(alerts)
+    telemetry_table = _build_telemetry(drones, alerts)
+
+    return (
+        fig,
+        str(total_alerts),
+        str(critical_alerts),
+        f"{total_alerts} Events",
+        feed_elements,
+        telemetry_table,
+    )
+
+
+# =============================================================================
+# Map builder
+# =============================================================================
+
+def _build_map(drones: list) -> go.Figure:
     fig = go.Figure()
 
-    # Add Trajectory Tails
     for d in drones:
-        path = d["path"]
-        if len(path) > 1:
-            lats = [pt[0] for pt in path]
-            lons = [pt[1] for pt in path]
-            color = DRONE_COLORS.get(d["id"], "#ffffff")
-            fig.add_trace(go.Scattermapbox(
-                mode="lines",
-                lon=lons,
-                lat=lats,
-                line=dict(width=2, color=color),
-                opacity=0.6,
-                hoverinfo="none",
-                showlegend=False
-            ))
-
-    # Add Kalman predicted trajectory + uncertainty cone
-    for d in drones:
-        predicted = d.get("predicted_path", [])
-        if not predicted:
-            continue
-
         color = DRONE_COLORS.get(d["id"], "#ffffff")
-        pred_lats = []
-        pred_lons = []
 
-        for (px, py, sigma) in predicted:
-            # Convert meters back to lat/lon
-            lat = BASE_LAT + (py / METERS_PER_DEGREE)
-            lon = BASE_LON + (px / METERS_PER_DEGREE)
-            pred_lats.append(lat)
-            pred_lons.append(lon)
-
-            # Uncertainty radius in degrees
-            sigma_deg = sigma / METERS_PER_DEGREE
-            c_lats, c_lons = uncertainty_circle(lat, lon, sigma_deg)
+        # Raw GPS track — faint white, shows noise
+        true_path = d.get("true_path", [])
+        if len(true_path) > 1:
             fig.add_trace(go.Scattermapbox(
                 mode="lines",
-                lon=c_lons,
-                lat=c_lats,
-                line=dict(width=1, color=color),
-                opacity=0.15,
+                lon=[pt[1] for pt in true_path],
+                lat=[pt[0] for pt in true_path],
+                line=dict(width=1, color="#ffffff"),
+                opacity=0.2,
                 hoverinfo="none",
-                showlegend=False
+                showlegend=False,
             ))
 
-        # Predicted path line — dashed look via opacity
-        fig.add_trace(go.Scattermapbox(
-            mode="lines+markers",
-            lon=pred_lons,
-            lat=pred_lats,
-            line=dict(width=1, color=color),
-            marker=dict(size=4, color=color, opacity=0.4),
-            opacity=0.35,
-            hoverinfo="none",
-            showlegend=False
-        ))
+        # Kalman-filtered track — vibrant, solid
+        filtered_path = d.get("path", [])
+        if len(filtered_path) > 1:
+            fig.add_trace(go.Scattermapbox(
+                mode="lines",
+                lon=[pt[1] for pt in filtered_path],
+                lat=[pt[0] for pt in filtered_path],
+                line=dict(width=2, color=color),
+                opacity=0.8,
+                hoverinfo="none",
+                showlegend=False,
+            ))
 
-    # Add Live Target Markers
-    curr_lats = [d["lat"] for d in drones]
-    curr_lons = [d["lon"] for d in drones]
-    curr_texts = [f"<b>{d['id']} ({d['name']})</b><br>Speed: {d['speed']} m/s<br>Heading: {d['heading']}°<br>Alt: {d['alt']}m<br>Profile: {d['behavior_type']}" for d in drones]
-    curr_colors = [DRONE_COLORS.get(d["id"], "#ffffff") for d in drones]
-
+    # Current position markers
     fig.add_trace(go.Scattermapbox(
         mode="markers+text",
-        lon=curr_lons,
-        lat=curr_lats,
-        marker=dict(
-            size=14,
-            color=curr_colors,
-            opacity=1.0,
-        ),
+        lon=[d["lon"] for d in drones],
+        lat=[d["lat"] for d in drones],
+        marker=dict(size=14, color=[DRONE_COLORS.get(d["id"], "#fff") for d in drones]),
         text=[d["id"] for d in drones],
         textposition="top right",
-        textfont=dict(color="#ffffff", size=11, family="sans-serif"),
+        textfont=dict(color="#ffffff", size=11),
         hoverinfo="text",
-        hovertext=curr_texts,
-        showlegend=False
+        hovertext=[
+            f"<b>{d['id']} — {d['name']}</b><br>"
+            f"Speed: {d['speed']} m/s  |  Heading: {d['heading']}°<br>"
+            f"Altitude: {d['alt']} m<br>"
+            f"Profile: {d['behavior_type']}<br>"
+            f"Pos: {round(d['lat'],4)}°N, {round(d['lon'],4)}°E"
+            for d in drones
+        ],
+        showlegend=False,
     ))
 
-    # Configure Map Layout with Multi-Zone GeoJSON Layers
     fig.update_layout(
         mapbox=dict(
             style="carto-darkmatter",
             center=dict(lat=BASE_LAT, lon=BASE_LON),
             zoom=12.2,
-            layers=geofence_manager.get_mapbox_layers()
+            layers=geofence_manager.get_mapbox_layers(),
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        uirevision="constant" # Secures dynamic user zoom/pan consistency across frame refreshes
+        uirevision="constant",
+    )
+    return fig
+
+
+# =============================================================================
+# Feed builder
+# =============================================================================
+
+def _build_feed(alerts: list) -> list:
+    if not alerts:
+        return [html.Div(
+            "No alerts. All monitored airspace secure.",
+            style={"color": "#10b981", "textAlign": "center",
+                   "marginTop": "20px", "fontSize": "13px"}
+        )]
+
+    SEV_COLORS = {
+        "CRITICAL": ("#ff2a2a", "rgba(255,42,42,0.08)",  "rgba(255,42,42,0.4)"),
+        "MEDIUM":   ("#ff9f1a", "rgba(255,159,26,0.05)", "rgba(255,159,26,0.4)"),
+        "LOW":      ("#fff200", "rgba(255,242,0,0.03)",  "rgba(255,242,0,0.4)"),
+    }
+
+    cards = []
+    for a in alerts[:50]:
+        badge, bg, border = SEV_COLORS.get(a["severity"], SEV_COLORS["LOW"])
+        cards.append(html.Div(
+            style={
+                "backgroundColor": bg,
+                "border": f"1px solid {border}",
+                "borderRadius": "6px",
+                "padding": "10px",
+                "display": "flex", "flexDirection": "column", "gap": "5px",
+            },
+            children=[
+                html.Div(
+                    style={"display": "flex", "justifyContent": "space-between", "alignItems": "center"},
+                    children=[
+                        html.Span(a["threat_type"].replace("_", " "),
+                                  style={"fontSize": "12px", "fontWeight": "bold", "color": badge}),
+                        html.Span(a["timestamp"],
+                                  style={"fontSize": "10px", "color": "#64748b"}),
+                    ]
+                ),
+                html.Div(f"Target {a['drone_id']} breached {a['zone_breached']} zone.",
+                         style={"fontSize": "12px", "color": "#e2e8f0"}),
+                html.Div(
+                    f"Speed: {a['speed']} m/s  |  Alt: {a.get('alt','—')} m  |  "
+                    f"Pos: {a['lat']}, {a['lon']}",
+                    style={"fontSize": "11px", "color": "#94a3b8"}
+                ),
+            ]
+        ))
+    return cards
+
+
+# =============================================================================
+# Telemetry table builder
+# =============================================================================
+
+def _build_telemetry(drones: list, alerts: list) -> html.Table:
+    header = html.Tr(
+        style={"borderBottom": "1px solid rgba(255,255,255,0.05)",
+               "color": "#94a3b8", "fontSize": "12px", "textAlign": "left"},
+        children=[
+            html.Th(col, style={"padding": "8px"})
+            for col in ["ID", "Callsign", "Profile", "Speed", "Heading", "Altitude", "Coordinates", "Status"]
+        ]
     )
 
-    # 2. Compute Top Line KPIs
-    total_alerts = len(alerts)
-    critical_alerts = sum(1 for a in alerts if a["severity"] == "CRITICAL")
-
-    # 3. Render Alert Logs
-    feed_elements = []
-    if not alerts:
-        feed_elements.append(html.Div(
-            "No alerts detected yet. All monitored airspace secure.",
-            style={"color": "#10b981", "textAlign": "center", "marginTop": "20px", "fontSize": "13px"}
-        ))
-    else:
-        # Display bounded visual sequence of modern styled alert entries
-        for a in alerts[:50]:
-            sev = a["severity"]
-            if sev == "CRITICAL":
-                border_color = "rgba(255, 42, 42, 0.4)"
-                bg_color = "rgba(255, 42, 42, 0.08)"
-                badge_color = "#ff2a2a"
-            elif sev == "MEDIUM":
-                border_color = "rgba(255, 159, 26, 0.4)"
-                bg_color = "rgba(255, 159, 26, 0.05)"
-                badge_color = "#ff9f1a"
-            else:
-                border_color = "rgba(255, 242, 0, 0.4)"
-                bg_color = "rgba(255, 242, 0, 0.03)"
-                badge_color = "#fff200"
-
-            card = html.Div(
-                style={
-                    "backgroundColor": bg_color,
-                    "border": f"1px solid {border_color}",
-                    "borderRadius": "6px",
-                    "padding": "10px",
-                    "display": "flex",
-                    "flexDirection": "column",
-                    "gap": "5px"
-                },
-                children=[
-                    html.Div(
-                        style={"display": "flex", "justifyContent": "space-between", "alignItems": "center"},
-                        children=[
-                            html.Span(a["threat_type"].replace("_", " "), style={"fontSize": "12px", "fontWeight": "bold", "color": badge_color}),
-                            html.Span(a["timestamp"], style={"fontSize": "10px", "color": "#64748b"})
-                        ]
-                    ),
-                    html.Div(f"Target {a['drone_id']} breached {a['zone_breached']} zone.", style={"fontSize": "12px", "color": "#e2e8f0"}),
-                    html.Div(f"Speed: {a['speed']} m/s | Pos: {a['lat']}, {a['lon']}", style={"fontSize": "11px", "color": "#94a3b8"})
-                ]
-            )
-            feed_elements.append(card)
-
-    # 4. Generate Responsive Telemetry Roster
-    table_rows = [
-        html.Tr(
-            style={"borderBottom": "1px solid rgba(255, 255, 255, 0.05)", "color": "#94a3b8", "fontSize": "12px", "textAlign": "left"},
-            children=[
-                html.Th("ID", style={"padding": "8px"}),
-                html.Th("Callsign", style={"padding": "8px"}),
-                html.Th("Assigned Profile", style={"padding": "8px"}),
-                html.Th("Speed", style={"padding": "8px"}),
-                html.Th("Heading", style={"padding": "8px"}),
-                html.Th("Coordinates", style={"padding": "8px"}),
-                html.Th("Status", style={"padding": "8px"})
-            ]
-        )
-    ]
-
+    rows = [header]
     for d in drones:
         d_alerts = [a for a in alerts if a["drone_id"] == d["id"]]
-        status_text = "NORMAL"
-        status_color = "#10b981"
+        status_text, status_color = "NOMINAL", "#10b981"
         if d_alerts:
-            latest_sev = d_alerts[0]["severity"]
-            if latest_sev == "CRITICAL":
-                status_text = "CRITICAL INTRUSION"
-                status_color = "#ff2a2a"
-            elif latest_sev == "MEDIUM":
-                status_text = "WARNING / LOITER"
-                status_color = "#ff9f1a"
+            sev = d_alerts[0]["severity"]
+            if sev == "CRITICAL":
+                status_text, status_color = "CRITICAL INTRUSION", "#ff2a2a"
+            elif sev == "MEDIUM":
+                status_text, status_color = "WARNING / LOITER",   "#ff9f1a"
             else:
-                status_text = "MONITORED"
-                status_color = "#fff200"
+                status_text, status_color = "MONITORED",          "#fff200"
 
-        row = html.Tr(
-            style={"borderBottom": "1px solid rgba(255, 255, 255, 0.03)", "fontSize": "13px", "color": "#e2e8f0"},
+        rows.append(html.Tr(
+            style={"borderBottom": "1px solid rgba(255,255,255,0.03)", "fontSize": "13px", "color": "#e2e8f0"},
             children=[
                 html.Td(html.Strong(d["id"], style={"color": DRONE_COLORS.get(d["id"], "#fff")}), style={"padding": "8px"}),
-                html.Td(d["name"], style={"padding": "8px"}),
-                html.Td(d["behavior_type"].replace("_", " "), style={"padding": "8px", "color": "#94a3b8"}),
-                html.Td(f"{d['speed']} m/s", style={"padding": "8px"}),
-                html.Td(f"{d['heading']}°", style={"padding": "8px"}),
-                html.Td(f"{round(d['lat'], 4)}, {round(d['lon'], 4)}", style={"padding": "8px", "fontFamily": "monospace"}),
-                html.Td(html.Span(status_text, style={"color": status_color, "fontWeight": "bold", "fontSize": "11px", "backgroundColor": f"{status_color}15", "padding": "2px 6px", "borderRadius": "4px"}), style={"padding": "8px"})
+                html.Td(d["name"],                          style={"padding": "8px"}),
+                html.Td(d["behavior_type"].replace("_"," "),style={"padding": "8px", "color": "#94a3b8"}),
+                html.Td(f"{d['speed']} m/s",                style={"padding": "8px"}),
+                html.Td(f"{d['heading']}°",                 style={"padding": "8px"}),
+                html.Td(f"{d['alt']} m",                    style={"padding": "8px", "color": "#00f2ff"}),
+                html.Td(f"{round(d['lat'],4)}, {round(d['lon'],4)}",
+                        style={"padding": "8px", "fontFamily": "monospace"}),
+                html.Td(
+                    html.Span(status_text, style={
+                        "color": status_color, "fontWeight": "bold", "fontSize": "11px",
+                        "backgroundColor": f"{status_color}15",
+                        "padding": "2px 6px", "borderRadius": "4px",
+                    }),
+                    style={"padding": "8px"}
+                ),
             ]
-        )
-        table_rows.append(row)
+        ))
 
-    telemetry_table = html.Table(
+    return html.Table(
         style={"width": "100%", "borderCollapse": "collapse"},
-        children=table_rows
+        children=rows
     )
 
-    feed_counter_text = f"{len(alerts)} Events"
 
-    return fig, str(total_alerts), str(critical_alerts), feed_counter_text, feed_elements, telemetry_table
+# =============================================================================
+# Helpers (moved above layout — see top of file)
+# =============================================================================
 
-# Initialize the simulation thread globally so it always runs
-simulation_engine.start()
+
+# =============================================================================
+# Entry point
+# =============================================================================
 
 if __name__ == "__main__":
+    simulation_engine.start()
     app.run(debug=False, port=8050, host="0.0.0.0")
