@@ -252,6 +252,16 @@ app.layout = html.Div(
     ]
 )
 
+def uncertainty_circle(lat, lon, radius_deg, points=8):
+    """Returns lat/lon lists forming a rough circle."""
+    import math
+    lats, lons = [], []
+    for i in range(points + 1):
+        angle = 2 * math.pi * i / points
+        lats.append(lat + radius_deg * math.sin(angle))
+        lons.append(lon + radius_deg * math.cos(angle))
+    return lats, lons
+
 @app.callback(
     Output("radar-map", "figure"),
     Output("kpi-total-alerts", "children"),
@@ -292,10 +302,9 @@ def update_dashboard(n):
         if not predicted:
             continue
 
+        color = DRONE_COLORS.get(d["id"], "#ffffff")
         pred_lats = []
         pred_lons = []
-        cone_lats = []
-        cone_lons = []
 
         for (px, py, sigma) in predicted:
             # Convert meters back to lat/lon
@@ -306,10 +315,16 @@ def update_dashboard(n):
 
             # Uncertainty radius in degrees
             sigma_deg = sigma / METERS_PER_DEGREE
-            cone_lats.append(lat)
-            cone_lons.append(lon)
-
-        color = DRONE_COLORS.get(d["id"], "#ffffff")
+            c_lats, c_lons = uncertainty_circle(lat, lon, sigma_deg)
+            fig.add_trace(go.Scattermapbox(
+                mode="lines",
+                lon=c_lons,
+                lat=c_lats,
+                line=dict(width=1, color=color),
+                opacity=0.15,
+                hoverinfo="none",
+                showlegend=False
+            ))
 
         # Predicted path line — dashed look via opacity
         fig.add_trace(go.Scattermapbox(
