@@ -1,4 +1,7 @@
-dash
-plotly
-shapely
-numpy
+﻿
+dash==4.1.0
+numpy==2.4.2
+plotly==6.5.2
+shapely==2.1.2
+
+
