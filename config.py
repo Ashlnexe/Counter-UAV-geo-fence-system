@@ -7,10 +7,10 @@
 import math
 
 # -----------------------------------------------------------------------------
-# Base location — Bengaluru city centre
+# Base location — Guadalajara, Mexico (matches sample_flight.csv)
 # -----------------------------------------------------------------------------
-BASE_LAT = 12.97   # degrees North
-BASE_LON = 77.59   # degrees East
+BASE_LAT = 20.4823   # degrees North
+BASE_LON = -103.3030 # degrees West
 
 # -----------------------------------------------------------------------------
 # Coordinate conversion — NOT a single flat-earth constant.
