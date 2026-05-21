@@ -67,17 +67,6 @@ class KalmanFilter2D:
         meters_per_lat      : conversion factor for latitude axis  (~110570 at equator)
         meters_per_lon      : conversion factor for longitude axis  (varies with cos(lat))
         """
-        dt = SIMULATION_STEP_SECONDS
-
-        # --- State transition matrix F (constant-velocity model) ---
-        # x_new = x + vx*dt,  vx_new = vx   (and same for y/lon)
-        self.F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1,  0],
-            [0, 0, 0,  1],
-        ], dtype=float)
-
         # --- Measurement matrix H ---
         # We only observe position, not velocity.
         self.H = np.array([
@@ -85,30 +74,10 @@ class KalmanFilter2D:
             [0, 1, 0, 0],
         ], dtype=float)
 
-        # --- Process noise covariance Q (CWNA discretization) ---
-        # Models uncertainty in the motion model itself (wind, manoeuvres).
-        #
-        # For each axis, the CWNA block is:
-        #   [[dt⁴/4·σ²,  dt³/2·σ²],
-        #    [dt³/2·σ²,  dt²·σ²  ]]
-        #
-        # The dt³/2 off-diagonal terms couple position and velocity uncertainty.
-        # Dropping them (diagonal-only Q) underestimates how a velocity error
-        # propagates into a position error over the next tick.
-        #
-        # Tuned for ~0.3 m/s² random acceleration (light manoeuvring UAV).
+        # Cache the process noise terms for faster Q computation
         sigma_a = 0.3  # m/s²
-        sa_lat = sigma_a / meters_per_lat   # in deg/s²
-        sa_lon = sigma_a / meters_per_lon   # in deg/s²
-
-        # Full 4×4 CWNA matrix — lat and lon axes are independent of each other
-        # but each axis has internal position-velocity coupling.
-        self.Q = np.array([
-            [0.25 * dt**4 * sa_lat**2,  0,                          0.5 * dt**3 * sa_lat**2,  0                         ],
-            [0,                          0.25 * dt**4 * sa_lon**2,  0,                          0.5 * dt**3 * sa_lon**2  ],
-            [0.5 * dt**3 * sa_lat**2,   0,                          dt**2 * sa_lat**2,          0                        ],
-            [0,                          0.5 * dt**3 * sa_lon**2,   0,                          dt**2 * sa_lon**2        ],
-        ])
+        self.sa_lat2 = (sigma_a / meters_per_lat)**2   # (deg/s²)²
+        self.sa_lon2 = (sigma_a / meters_per_lon)**2   # (deg/s²)²
 
         # --- Measurement noise covariance R ---
         # Reflects GPS accuracy. GPS_NOISE_STD_M converted to degrees separately
@@ -122,10 +91,26 @@ class KalmanFilter2D:
         self.x = np.array([init_lat, init_lon, 0.0, 0.0], dtype=float)
         self.P = np.eye(4) * 1e-4   # small initial uncertainty
 
-    def predict(self) -> None:
-        """Propagate state forward one time step using the motion model."""
-        self.x = self.F @ self.x
-        self.P = self.F @ self.P @ self.F.T + self.Q
+    def predict(self, dt: float) -> None:
+        """Propagate state forward using the motion model with actual time elapsed."""
+        # Update state transition matrix F for this dt
+        F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1,  0],
+            [0, 0, 0,  1],
+        ], dtype=float)
+
+        # Update process noise covariance Q for this dt
+        Q = np.array([
+            [0.25 * dt**4 * self.sa_lat2,  0,                             0.5 * dt**3 * self.sa_lat2,  0                           ],
+            [0,                             0.25 * dt**4 * self.sa_lon2,  0,                             0.5 * dt**3 * self.sa_lon2 ],
+            [0.5 * dt**3 * self.sa_lat2,   0,                             dt**2 * self.sa_lat2,        0                           ],
+            [0,                             0.5 * dt**3 * self.sa_lon2,   0,                             dt**2 * self.sa_lon2       ],
+        ])
+
+        self.x = F @ self.x
+        self.P = F @ self.P @ F.T + Q
 
     def update(self, lat_meas: float, lon_meas: float) -> None:
         """
@@ -149,15 +134,19 @@ class KalmanFilter2D:
         I_KH = np.eye(4) - K @ self.H
         self.P = I_KH @ self.P @ I_KH.T + K @ self.R @ K.T
 
-    def step(self, lat_meas: float, lon_meas: float) -> tuple[float, float]:
+    def step(self, lat_meas: float, lon_meas: float, dt: float) -> tuple[float, float]:
         """
         Run one full predict→update cycle.
+
+        Parameters
+        ----------
+        dt : time elapsed since last step in seconds
 
         Returns
         -------
         (lat_filtered, lon_filtered) : smoothed position estimate in degrees
         """
-        self.predict()
+        self.predict(dt)
         self.update(lat_meas, lon_meas)
         return float(self.x[0]), float(self.x[1])
 

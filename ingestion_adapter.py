@@ -70,8 +70,23 @@ class _TrackedDrone:
                 meters_per_lat=METERS_PER_LAT_DEGREE,
                 meters_per_lon=METERS_PER_LON_DEGREE,
             )
+            self.last_ts = frame.timestamp
+            self.lat = frame.lat
+            self.lon = frame.lon
+            self.filtered_path.append((frame.lat, frame.lon))
+            self.alt     = frame.alt
+            self.speed   = frame.speed
+            self.heading = frame.heading
+            self.name    = frame.drone_id
+            return
 
-        filt_lat, filt_lon = self.kf.step(frame.lat, frame.lon)
+        dt = frame.timestamp - self.last_ts
+        if dt <= 0:
+            dt = 1e-6  # safeguard against duplicate timestamps
+
+        filt_lat, filt_lon = self.kf.step(frame.lat, frame.lon, dt=dt)
+        self.last_ts = frame.timestamp
+        
         self.lat = filt_lat
         self.lon = filt_lon
         self.filtered_path.append((filt_lat, filt_lon))

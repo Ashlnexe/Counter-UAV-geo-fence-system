@@ -116,7 +116,7 @@ class Drone:
         self._update_altitude()
 
         noisy_lat, noisy_lon = self._inject_gps_noise()
-        filt_lat, filt_lon   = self.kf.step(noisy_lat, noisy_lon)
+        filt_lat, filt_lon   = self.kf.step(noisy_lat, noisy_lon, dt=SIMULATION_STEP_SECONDS)
 
         self.lat = filt_lat
         self.lon = filt_lon

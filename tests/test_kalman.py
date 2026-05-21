@@ -78,12 +78,12 @@ class TestConvergence:
 
         # warm up
         for lat_m, lon_m in readings[:N_WARMUP]:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         # measure
         sq_errors = []
         for lat_m, lon_m in readings[N_WARMUP:]:
-            lat_f, lon_f = kf.step(lat_m, lon_m)
+            lat_f, lon_f = kf.step(lat_m, lon_m, dt=0.5)
             err_lat_m = (lat_f - TRUE_LAT) * METERS_PER_LAT
             err_lon_m = (lon_f - TRUE_LON) * METERS_PER_LON
             sq_errors.append(err_lat_m**2 + err_lon_m**2)
@@ -108,11 +108,11 @@ class TestConvergence:
         readings = noisy_readings(N_WARMUP + N_MEASURE, rng)
 
         for lat_m, lon_m in readings[:N_WARMUP]:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         raw_sq, filtered_sq = [], []
         for lat_m, lon_m in readings[N_WARMUP:]:
-            lat_f, lon_f = kf.step(lat_m, lon_m)
+            lat_f, lon_f = kf.step(lat_m, lon_m, dt=0.5)
 
             raw_sq.append(
                 ((lat_m - TRUE_LAT) * METERS_PER_LAT)**2 +
@@ -148,7 +148,7 @@ class TestNumericalStability:
         readings = noisy_readings(2000, rng)
 
         for lat_m, lon_m in readings:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         eigenvalues = np.linalg.eigvalsh(kf.P)
         assert np.all(eigenvalues > 0), (
@@ -165,7 +165,7 @@ class TestNumericalStability:
         readings = noisy_readings(2000, rng)
 
         for lat_m, lon_m in readings:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         asymmetry = np.max(np.abs(kf.P - kf.P.T))
         assert asymmetry < 1e-12, (
@@ -184,7 +184,7 @@ class TestNumericalStability:
         rng = np.random.default_rng(SEED)
         readings = noisy_readings(100, rng)
         for lat_m, lon_m in readings:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         final_trace = np.trace(kf.P)
         assert final_trace < initial_trace, (
@@ -207,7 +207,7 @@ class TestSpeedEstimate:
         readings = noisy_readings(N_WARMUP + 20, rng)
 
         for lat_m, lon_m in readings:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         speed = kf.estimated_speed_mps
         assert speed < 1.0, (
@@ -235,7 +235,7 @@ class TestSpeedEstimate:
             lat += vlat_deg_per_s * dt
             noisy_lat = lat + rng.normal(0, GPS_NOISE_STD_LAT)
             noisy_lon = lon + rng.normal(0, GPS_NOISE_STD_LON)
-            kf.step(noisy_lat, noisy_lon)
+            kf.step(noisy_lat, noisy_lon, dt=0.5)
 
         estimated = kf.estimated_speed_mps
         assert abs(estimated - true_speed_mps) < 3.0, (
@@ -250,7 +250,7 @@ class TestSpeedEstimate:
 class TestInterface:
     def test_step_returns_tuple_of_floats(self):
         kf = make_filter()
-        result = kf.step(TRUE_LAT + 1e-5, TRUE_LON + 1e-5)
+        result = kf.step(TRUE_LAT + 1e-5, TRUE_LON + 1e-5, dt=0.5)
         assert isinstance(result, tuple), "step() must return a tuple"
         assert len(result) == 2, "step() must return exactly 2 values"
         assert all(isinstance(v, float) for v in result), \
@@ -262,7 +262,7 @@ class TestInterface:
         Initial P is small, so the first update shouldn't jump far.
         """
         kf = make_filter()
-        lat_f, lon_f = kf.step(TRUE_LAT, TRUE_LON)
+        lat_f, lon_f = kf.step(TRUE_LAT, TRUE_LON, dt=0.5)
         assert abs(lat_f - TRUE_LAT) < 0.01, "First step lat jumped unreasonably"
         assert abs(lon_f - TRUE_LON) < 0.01, "First step lon jumped unreasonably"
 
@@ -270,7 +270,7 @@ class TestInterface:
         kf = make_filter()
         rng = np.random.default_rng(SEED)
         for lat_m, lon_m in noisy_readings(20, rng):
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
         assert kf.estimated_speed_mps >= 0.0
 
 
@@ -288,11 +288,11 @@ class TestRobustness:
         readings = noisy_readings(N_WARMUP + N_MEASURE, rng, noise_scale=10.0)
 
         for lat_m, lon_m in readings[:N_WARMUP]:
-            kf.step(lat_m, lon_m)
+            kf.step(lat_m, lon_m, dt=0.5)
 
         raw_sq, filtered_sq = [], []
         for lat_m, lon_m in readings[N_WARMUP:]:
-            lat_f, lon_f = kf.step(lat_m, lon_m)
+            lat_f, lon_f = kf.step(lat_m, lon_m, dt=0.5)
             raw_sq.append(
                 ((lat_m - TRUE_LAT) * METERS_PER_LAT)**2 +
                 ((lon_m - TRUE_LON) * METERS_PER_LON)**2
@@ -317,4 +317,4 @@ class TestRobustness:
         """
         kf = make_filter()
         for _ in range(50):
-            kf.step(TRUE_LAT, TRUE_LON)  # must not raise
+            kf.step(TRUE_LAT, TRUE_LON, dt=0.5)  # must not raise
