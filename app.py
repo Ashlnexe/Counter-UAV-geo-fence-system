@@ -7,7 +7,18 @@ import plotly.graph_objects as go
 
 from config import BASE_LAT, BASE_LON, ZONES
 from geofence import geofence_manager
-from simulation import simulation_engine
+import os
+
+DATA_SOURCE = os.getenv("UAV_DATA_SOURCE", "simulation")  # "simulation" | "csv" | "mavlink"
+
+if DATA_SOURCE == "simulation":
+    from simulation import simulation_engine
+    get_state = simulation_engine.get_state
+else:
+    from data_ingestion import open_log
+    from ingestion_adapter import IngestionAdapter
+    adapter = IngestionAdapter(open_log(os.getenv("UAV_LOG_PATH"), drone_id="UAV-REAL"))
+    get_state = adapter.get_state
 
 app = Dash(__name__, title="Counter-UAV Geo-Fence Monitor")
 
@@ -227,7 +238,7 @@ app.layout = html.Div(
     Input("live-interval",            "n_intervals"),
 )
 def update_dashboard(n):
-    state  = simulation_engine.get_state()
+    state  = get_state()
     drones = state["drones"]
     alerts = state["alerts"]
 
@@ -436,5 +447,8 @@ def _build_telemetry(drones: list, alerts: list) -> html.Table:
 # =============================================================================
 
 if __name__ == "__main__":
-    simulation_engine.start()
+    if DATA_SOURCE == "simulation":
+        simulation_engine.start()
+    else:
+        adapter.start()
     app.run(debug=False, port=8050, host="0.0.0.0")
