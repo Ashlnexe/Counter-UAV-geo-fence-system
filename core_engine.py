@@ -144,14 +144,21 @@ class TrackingEngine:
 
     def _run_loop(self) -> None:
         while self.is_running:
-            # Block for up to 100ms waiting for new data
-            try:
-                frame: TelemetryFrame = self.q.get(timeout=0.1)
-                self._process_frame(frame)
-            except queue.Empty:
-                pass
+            # 1. Drain the queue of all immediately available frames
+            frames_processed = 0
+            while not self.q.empty() and frames_processed < 50: # Batch limit to prevent starvation
+                try:
+                    frame: TelemetryFrame = self.q.get_nowait()
+                    self._process_frame(frame)
+                    frames_processed += 1
+                except queue.Empty:
+                    break
+            
+            # 2. If the queue was empty, wait a fraction of a second so we don't redline the CPU
+            if frames_processed == 0:
+                time.sleep(0.05)
                 
-            # Threat evaluation happens at 10Hz continuously
+            # 3. Evaluate threats exactly ONCE per batch cycle
             with self.lock:
                 now = time.time()
                 for drone in self.drones.values():
