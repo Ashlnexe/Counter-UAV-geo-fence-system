@@ -8,17 +8,27 @@ import plotly.graph_objects as go
 from config import BASE_LAT, BASE_LON, ZONES
 from geofence import geofence_manager
 import os
+from adapters import SimulatorAdapter, CSVReplayAdapter, MAVLinkAdapter, OpenSkyAdapter
+from core_engine import tracking_engine
 
-DATA_SOURCE = os.getenv("UAV_DATA_SOURCE", "simulation")  # "simulation" | "csv" | "mavlink"
+DATA_SOURCE = os.getenv("UAV_DATA_SOURCE", "simulation").lower()
 
 if DATA_SOURCE == "simulation":
-    from simulation import simulation_engine
-    get_state = simulation_engine.get_state
+    adapter = SimulatorAdapter()
+elif DATA_SOURCE == "csv":
+    log_path = os.getenv("UAV_LOG_PATH", "logs/sample_flight.csv")
+    adapter = CSVReplayAdapter(log_path, speed_multiplier=1.0)
+elif DATA_SOURCE == "mavlink":
+    log_path = os.getenv("UAV_LOG_PATH", "logs/flight.tlog")
+    adapter = MAVLinkAdapter(log_path)
+elif DATA_SOURCE == "opensky":
+    adapter = OpenSkyAdapter(poll_interval=10)
 else:
-    from data_ingestion import open_log
-    from ingestion_adapter import IngestionAdapter
-    adapter = IngestionAdapter(open_log(os.getenv("UAV_LOG_PATH"), drone_id="UAV-REAL"))
-    get_state = adapter.get_state
+    raise ValueError(f"Unknown UAV_DATA_SOURCE: {DATA_SOURCE}")
+
+# Start the event-driven tracking engine with the chosen adapter
+tracking_engine.start([adapter])
+get_state = tracking_engine.get_state
 
 app = Dash(__name__, title="Counter-UAV Geo-Fence Monitor")
 
@@ -447,8 +457,4 @@ def _build_telemetry(drones: list, alerts: list) -> html.Table:
 # =============================================================================
 
 if __name__ == "__main__":
-    if DATA_SOURCE == "simulation":
-        simulation_engine.start()
-    else:
-        adapter.start()
     app.run(debug=False, port=8050, host="0.0.0.0")

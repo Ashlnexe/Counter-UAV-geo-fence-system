@@ -30,7 +30,6 @@ from config import (
 )
 from geofence import geofence_manager
 
-
 class ThreatEngine:
     """
     Stateful threat classifier. Maintains per-drone history to detect
@@ -59,7 +58,7 @@ class ThreatEngine:
 
         Parameters
         ----------
-        drones : list of Drone objects (from simulation.py)
+        drones : list of Drone objects
         """
         with self._lock:
             for drone in drones:
@@ -73,29 +72,59 @@ class ThreatEngine:
         if drone_id not in self._drone_states:
             self._drone_states[drone_id] = {
                 "prev_zones":             set(),
-                "loiter_steps":           0,
+                "loiter_start_time":      None,
                 "loiter_alerted":         False,
                 "entry_count":            0,
                 "last_entry_alerted_count": 0,
+                "kinematic_alert_cooldown": 0.0,
             }
         return self._drone_states[drone_id]
 
     def _evaluate_drone(self, drone) -> None:
         d_id  = drone.id
-        lat   = drone.lat           # Kalman-filtered position
+        # Use UTM Cartesian coordinates for spatial logic
+        easting  = drone.easting
+        northing = drone.northing
+        
+        # Use WGS84 for alerts and dashboard display
+        lat   = drone.lat
         lon   = drone.lon
-        speed = drone.kalman_speed  # Kalman-derived speed (noise-robust)
+        
+        speed = drone.kalman_speed
         alt   = drone.alt
+        ts    = drone.last_ts
 
         state = self._get_state(d_id)
-        curr_zones = set(geofence_manager.get_containing_zones(lat, lon))
+        # ---- 0. Deterministic Kinematic Rules (Replaces ML) ----------------
+        MAX_KINEMATIC_SPEED_MPS = 30.0  # e.g., 108 km/h is highly suspicious
+        if speed > MAX_KINEMATIC_SPEED_MPS and (ts - state["kinematic_alert_cooldown"] > 10.0):
+            self._add_alert(
+                drone_id=d_id,
+                zone_breached="N/A",
+                threat_type="KINEMATIC_ANOMALY",
+                severity="HIGH",
+                lat=lat, lon=lon,
+                speed=speed, alt=alt,
+            )
+            state["kinematic_alert_cooldown"] = ts
 
-        # ---- 1. Loitering detection ----------------------------------------
-        min_dist, closest_zone = geofence_manager.get_closest_boundary(lat, lon)
+        # Use the expanding covariance bound from the Kalman filter for pessimistic collision checking
+        r_uncert = getattr(drone, 'uncertainty_radius_m', 0.0)
+        curr_zones = set(geofence_manager.get_containing_zones(easting, northing, radius_m=r_uncert))
+
+        # ---- 1. Loitering detection (Time-based) ---------------------------
+        min_dist, closest_zone = geofence_manager.get_closest_boundary(easting, northing, radius_m=r_uncert)
 
         if min_dist <= LOITER_DISTANCE_THRESHOLD_M and "EXCLUSION" not in curr_zones:
-            state["loiter_steps"] += 1
-            if state["loiter_steps"] > LOITER_TIME_STEPS and not state["loiter_alerted"]:
+            if state["loiter_start_time"] is None:
+                state["loiter_start_time"] = ts
+                
+            elapsed = ts - state["loiter_start_time"]
+            # config.py has LOITER_TIME_STEPS. Let's assume 1 step = 0.5s in the old system, 
+            # so LOITER_TIME_STEPS * 0.5 = seconds. Or let's just use 5.0 seconds.
+            loiter_threshold_sec = LOITER_TIME_STEPS * 0.5 
+            
+            if elapsed > loiter_threshold_sec and not state["loiter_alerted"]:
                 self._add_alert(
                     drone_id=d_id,
                     zone_breached=f"{closest_zone} Perimeter",
@@ -107,7 +136,7 @@ class ThreatEngine:
                 state["loiter_alerted"] = True
         else:
             if min_dist > LOITER_DISTANCE_THRESHOLD_M:
-                state["loiter_steps"]   = 0
+                state["loiter_start_time"] = None
                 state["loiter_alerted"] = False
 
         # ---- 2. Zone-entry threat classification ---------------------------

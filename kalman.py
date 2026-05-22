@@ -41,59 +41,34 @@
 # =============================================================================
 
 import numpy as np
-from config import SIMULATION_STEP_SECONDS, GPS_NOISE_STD_M
-
 
 class KalmanFilter2D:
     """
-    Constant-velocity Kalman filter tracking a single UAV in 2D (lat/lon).
-
-    Units are kept in degrees throughout to stay compatible with the rest
-    of the pipeline. Noise parameters are converted from metres at init.
-
-    Process noise uses the full Continuous White Noise Acceleration (CWNA)
-    discretization, including position-velocity cross-terms (dt³/2 · σ²).
-    These cross-terms couple position and velocity uncertainty correctly —
-    omitting them (diagonal-only Q) underestimates how position uncertainty
-    grows when velocity is uncertain.
+    Constant-velocity Kalman filter tracking a single UAV in 2D (Easting, Northing).
+    Operates strictly in Cartesian meters (e.g., UTM projection).
     """
-
-    def __init__(self, init_lat: float, init_lon: float,
-                 meters_per_lat: float, meters_per_lon: float):
-        """
-        Parameters
-        ----------
-        init_lat / init_lon : initial position in degrees
-        meters_per_lat      : conversion factor for latitude axis  (~110570 at equator)
-        meters_per_lon      : conversion factor for longitude axis  (varies with cos(lat))
-        """
-        # --- Measurement matrix H ---
-        # We only observe position, not velocity.
+    def __init__(self, init_easting: float, init_northing: float):
         self.H = np.array([
             [1, 0, 0, 0],
             [0, 1, 0, 0],
         ], dtype=float)
 
-        # Cache the process noise terms for faster Q computation
-        sigma_a = 0.3  # m/s²
-        self.sa_lat2 = (sigma_a / meters_per_lat)**2   # (deg/s²)²
-        self.sa_lon2 = (sigma_a / meters_per_lon)**2   # (deg/s²)²
+        # Process noise variance (acceleration variance m^2/s^4)
+        sigma_a = 0.3
+        self.sa2 = sigma_a**2
 
-        # --- Measurement noise covariance R ---
-        # Reflects GPS accuracy. GPS_NOISE_STD_M converted to degrees separately
-        # per axis — latitude and longitude degrees have different metre lengths,
-        # especially at non-equatorial latitudes (Bengaluru: ~2% difference).
-        sigma_lat = GPS_NOISE_STD_M / meters_per_lat
-        sigma_lon = GPS_NOISE_STD_M / meters_per_lon
-        self.R = np.diag([sigma_lat**2, sigma_lon**2])
+        # Measurement noise covariance (GPS error in meters)
+        # Standard deviation e.g. 2.0 meters
+        gps_noise_std = 2.0
+        self.R = np.diag([gps_noise_std**2, gps_noise_std**2])
 
-        # --- State vector and covariance ---
-        self.x = np.array([init_lat, init_lon, 0.0, 0.0], dtype=float)
-        self.P = np.eye(4) * 1e-4   # small initial uncertainty
+        self.x = np.array([init_easting, init_northing, 0.0, 0.0], dtype=float)
+        self.P = np.eye(4) * 1e-4
 
     def predict(self, dt: float) -> None:
-        """Propagate state forward using the motion model with actual time elapsed."""
-        # Update state transition matrix F for this dt
+        """Propagate state forward using the motion model."""
+        if dt <= 0: return
+
         F = np.array([
             [1, 0, dt, 0],
             [0, 1, 0, dt],
@@ -101,63 +76,59 @@ class KalmanFilter2D:
             [0, 0, 0,  1],
         ], dtype=float)
 
-        # Update process noise covariance Q for this dt
+        # Q cross-terms correctly couple position and velocity uncertainty
+        q_pos = 0.25 * dt**4 * self.sa2
+        q_cov = 0.5 * dt**3 * self.sa2
+        q_vel = dt**2 * self.sa2
+
         Q = np.array([
-            [0.25 * dt**4 * self.sa_lat2,  0,                             0.5 * dt**3 * self.sa_lat2,  0                           ],
-            [0,                             0.25 * dt**4 * self.sa_lon2,  0,                             0.5 * dt**3 * self.sa_lon2 ],
-            [0.5 * dt**3 * self.sa_lat2,   0,                             dt**2 * self.sa_lat2,        0                           ],
-            [0,                             0.5 * dt**3 * self.sa_lon2,   0,                             dt**2 * self.sa_lon2       ],
+            [q_pos, 0,     q_cov, 0    ],
+            [0,     q_pos, 0,     q_cov],
+            [q_cov, 0,     q_vel, 0    ],
+            [0,     q_cov, 0,     q_vel],
         ])
 
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
 
-    def update(self, lat_meas: float, lon_meas: float) -> None:
-        """
-        Correct state estimate using a new GPS measurement.
-
-        Uses the Joseph-form covariance update for numerical stability:
-            P = (I - KH) P (I - KH)^T + K R K^T
-
-        This is algebraically identical to the naive P = (I - KH)P but
-        preserves symmetry and positive-definiteness under floating-point
-        arithmetic — critical for long-running filters (thousands of ticks).
-        """
-        z = np.array([lat_meas, lon_meas])
-        y = z - self.H @ self.x                        # innovation
-        S = self.H @ self.P @ self.H.T + self.R        # innovation covariance
-        K = self.P @ self.H.T @ np.linalg.inv(S)       # Kalman gain
+    def update(self, easting_meas: float, northing_meas: float) -> None:
+        """Correct state estimate using Joseph form."""
+        z = np.array([easting_meas, northing_meas])
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
 
         self.x = self.x + K @ y
 
-        # Joseph form — numerically stable covariance update
         I_KH = np.eye(4) - K @ self.H
         self.P = I_KH @ self.P @ I_KH.T + K @ self.R @ K.T
 
-    def step(self, lat_meas: float, lon_meas: float, dt: float) -> tuple[float, float]:
-        """
-        Run one full predict→update cycle.
-
-        Parameters
-        ----------
-        dt : time elapsed since last step in seconds
-
-        Returns
-        -------
-        (lat_filtered, lon_filtered) : smoothed position estimate in degrees
-        """
+    def step(self, easting_meas: float, northing_meas: float, dt: float) -> tuple[float, float]:
         self.predict(dt)
-        self.update(lat_meas, lon_meas)
+        self.update(easting_meas, northing_meas)
         return float(self.x[0]), float(self.x[1])
+        
+    def project_future(self, steps: int, dt: float) -> list[tuple[float, float]]:
+        """
+        Phase 3: Trajectory Prediction
+        Projects the current state forward 'steps' times without updating covariance.
+        Returns a list of predicted (easting, northing) positions.
+        """
+        F = np.array([
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1,  0],
+            [0, 0, 0,  1],
+        ], dtype=float)
+        
+        future_path = []
+        x_proj = self.x.copy()
+        for _ in range(steps):
+            x_proj = F @ x_proj
+            future_path.append((float(x_proj[0]), float(x_proj[1])))
+        return future_path
 
     @property
     def estimated_speed_mps(self) -> float:
-        """
-        Magnitude of velocity estimate in m/s.
-        Derived from the filter state — more stable than frame-differencing
-        raw GPS positions, which amplifies noise.
-        """
-        from config import METERS_PER_LAT_DEGREE, METERS_PER_LON_DEGREE
-        vlat_mps = self.x[2] * METERS_PER_LAT_DEGREE
-        vlon_mps = self.x[3] * METERS_PER_LON_DEGREE
-        return float(np.hypot(vlat_mps, vlon_mps))
+        """Magnitude of velocity estimate in m/s."""
+        return float(np.hypot(self.x[2], self.x[3]))

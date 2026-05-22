@@ -87,7 +87,7 @@ class SimulatorAdapter(SensorAdapter):
     Replaces the old SimulationEngine background thread.
     """
     def __init__(self):
-        self._connected = False
+        super().__init__()
         self.drones = []
 
     def connect(self) -> bool:
@@ -97,17 +97,16 @@ class SimulatorAdapter(SensorAdapter):
             SimDrone("UAV-03", "HIGH_SPEED", 3500.0, math.radians(240), 22.0),
             SimDrone("UAV-04", "PERIMETER_TEST", 3000.0, math.radians(300), 14.0)
         ]
-        self._connected = True
         return True
 
     def disconnect(self) -> None:
-        self._connected = False
-
-    def is_connected(self) -> bool:
-        return self._connected
+        self.drones = []
 
     def get_stream(self) -> Generator[TelemetryFrame, None, None]:
         while self.is_connected():
+            now = time.time()
             for drone in self.drones:
-                yield drone.tick(SIMULATION_STEP_SECONDS)
+                frame = drone.tick(SIMULATION_STEP_SECONDS)
+                frame.timestamp = now  # ensure concurrent timestamps
+                yield frame
             time.sleep(SIMULATION_STEP_SECONDS)

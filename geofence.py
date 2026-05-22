@@ -14,101 +14,73 @@
 # =============================================================================
 
 import math
-import numpy as np
 import shapely.geometry
-import shapely.affinity
 
-from config import (
-    BASE_LAT, BASE_LON,
-    METERS_PER_LAT_DEGREE, METERS_PER_LON_DEGREE,
-    ZONES
-)
+from config import BASE_LAT, BASE_LON, ZONES
+import geo_utils
 
 
 class GeofenceManager:
     """
     Manages concentric geo-fence zones and exposes spatial queries.
-
-    All public methods accept/return geographic coordinates (lat, lon)
-    in decimal degrees. Internal geometry is in degrees but correctly
-    scaled per axis so distance calculations are accurate.
+    All internal geometry and queries operate in UTM Cartesian meters.
+    Converts back to WGS84 solely for UI rendering.
     """
 
     def __init__(self):
-        self.center_point = shapely.geometry.Point(BASE_LON, BASE_LAT)
+        # Ensure projection is initialized
+        geo_utils.init_projection(BASE_LAT, BASE_LON)
+        center_e, center_n = geo_utils.to_utm(BASE_LAT, BASE_LON)
+        self.center_point = shapely.geometry.Point(center_e, center_n)
+        
         self.zone_polygons: dict[str, shapely.geometry.Polygon] = {}
         self._init_zones()
 
     def _init_zones(self) -> None:
-        """
-        Build elliptical (but geographically circular) polygons for each zone.
-
-        Strategy: create a unit circle in degree-space, then scale the x-axis
-        (longitude) by radius/METERS_PER_LON_DEGREE and y-axis (latitude) by
-        radius/METERS_PER_LAT_DEGREE. This produces a shape that is a true
-        circle when distances are measured in metres.
-        """
+        """Build perfect circles in the Cartesian plane."""
         for zone_name, props in ZONES.items():
             radius_m = props["radius"]
+            # buffer creates a circle in the Cartesian plane
+            self.zone_polygons[zone_name] = self.center_point.buffer(radius_m, resolution=64)
 
-            # Degrees per metre on each axis
-            lat_deg_per_m = 1.0 / METERS_PER_LAT_DEGREE
-            lon_deg_per_m = 1.0 / METERS_PER_LON_DEGREE
-
-            # Build a circle with radius 1 in degree-space, then scale
-            # x (lon) and y (lat) axes independently
-            unit_circle = self.center_point.buffer(1.0, resolution=32)
-            scaled = shapely.affinity.scale(
-                unit_circle,
-                xfact=radius_m * lon_deg_per_m,
-                yfact=radius_m * lat_deg_per_m,
-                origin=self.center_point
-            )
-            self.zone_polygons[zone_name] = scaled
-
-    def get_containing_zones(self, lat: float, lon: float) -> list[str]:
+    def get_containing_zones(self, easting: float, northing: float, radius_m: float = 0.0) -> list[str]:
         """
-        Return zone names that contain the given position.
-        Ordered from highest severity to lowest: EXCLUSION → BUFFER → MONITORED.
+        Return zone names that contain the given position, accounting for uncertainty.
+        Ordered from highest severity to lowest.
         """
-        point = shapely.geometry.Point(lon, lat)
-        return [
-            z for z in ["EXCLUSION", "BUFFER", "MONITORED"]
-            if z in self.zone_polygons and self.zone_polygons[z].contains(point)
-        ]
+        point = shapely.geometry.Point(easting, northing)
+        if radius_m > 0:
+            shape = point.buffer(radius_m)
+            return [
+                z for z in ["EXCLUSION", "BUFFER", "MONITORED"]
+                if z in self.zone_polygons and self.zone_polygons[z].intersects(shape)
+            ]
+        else:
+            return [
+                z for z in ["EXCLUSION", "BUFFER", "MONITORED"]
+                if z in self.zone_polygons and self.zone_polygons[z].contains(point)
+            ]
 
-    def get_distance_to_boundary_m(self, lat: float, lon: float,
-                                   zone_name: str) -> float:
+    def get_distance_to_boundary_m(self, easting: float, northing: float, zone_name: str) -> float:
         """
-        Return the distance in metres from the point to a specific zone boundary.
-        Positive = outside the zone, negative = inside.
+        Return the exact Cartesian distance in metres from the point to a zone boundary.
         """
-        point = shapely.geometry.Point(lon, lat)
-        poly  = self.zone_polygons[zone_name]
+        point = shapely.geometry.Point(easting, northing)
+        poly = self.zone_polygons[zone_name]
+        return point.distance(poly.boundary)
 
-        dist_deg = point.distance(poly.boundary)
-
-        # Convert degree distance back to metres using the mean conversion factor
-        # (Euclidean distance in degree-space mixes lat and lon, so we use the
-        # geometric mean of the two conversion factors as an approximation.)
-        mean_m_per_deg = math.sqrt(METERS_PER_LAT_DEGREE * METERS_PER_LON_DEGREE)
-        return dist_deg * mean_m_per_deg
-
-    def get_closest_boundary(self, lat: float, lon: float) -> tuple[float, str]:
-        """
-        Return (min_distance_m, closest_zone_name) across all zones.
-        Used by the threat engine to detect loitering near boundaries.
-        """
-        point = shapely.geometry.Point(lon, lat)
-        mean_m_per_deg = math.sqrt(METERS_PER_LAT_DEGREE * METERS_PER_LON_DEGREE)
-
-        min_dist_m   = float("inf")
+    def get_closest_boundary(self, easting: float, northing: float, radius_m: float = 0.0) -> tuple[float, str]:
+        """Return (min_distance_m, closest_zone_name), taking into account uncertainty radius."""
+        point = shapely.geometry.Point(easting, northing)
+        shape = point.buffer(radius_m) if radius_m > 0 else point
+        
+        min_dist_m = float("inf")
         closest_zone = "MONITORED"
 
         for zone_name, poly in self.zone_polygons.items():
-            dist_m = point.distance(poly.boundary) * mean_m_per_deg
+            dist_m = shape.distance(poly.boundary)
             if dist_m < min_dist_m:
-                min_dist_m   = dist_m
+                min_dist_m = dist_m
                 closest_zone = zone_name
 
         return min_dist_m, closest_zone
@@ -116,13 +88,18 @@ class GeofenceManager:
     def get_mapbox_layers(self) -> list[dict]:
         """
         Generate Plotly Dash mapbox layer specs for all zones.
-        Rendered largest-to-smallest so inner zones visually stack on top.
+        Converts internal UTM Cartesian coordinates back to WGS84 for mapping.
         """
         layers = []
         for zone_name in ["MONITORED", "BUFFER", "EXCLUSION"]:
             props = ZONES[zone_name]
-            poly  = self.zone_polygons[zone_name]
-            coords = list(poly.exterior.coords)   # [[lon, lat], ...]
+            poly = self.zone_polygons[zone_name]
+            
+            # Convert UTM boundary coordinates back to WGS84 (lon, lat) for Plotly GeoJSON
+            coords = []
+            for e, n in poly.exterior.coords:
+                lat, lon = geo_utils.to_wgs84(e, n)
+                coords.append([lon, lat])
 
             geojson = {
                 "type": "Feature",
@@ -130,14 +107,12 @@ class GeofenceManager:
                 "properties": {"name": zone_name}
             }
 
-            # Fill layer
             layers.append({
                 "sourcetype": "geojson",
                 "source": geojson,
                 "type": "fill",
                 "color": props["fill_color"],
             })
-            # Boundary line layer
             layers.append({
                 "sourcetype": "geojson",
                 "source": geojson,
@@ -148,8 +123,4 @@ class GeofenceManager:
 
         return layers
 
-
-# ---------------------------------------------------------------------------
-# Module-level singleton — import this everywhere
-# ---------------------------------------------------------------------------
 geofence_manager = GeofenceManager()
