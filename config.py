@@ -37,18 +37,24 @@ METERS_PER_LON_DEGREE = 111_320.0 * math.cos(math.radians(BASE_LAT))  # ≈ 108,
 ZONES = {
     "EXCLUSION": {
         "radius": 1000.0,           # metres
+        "alt_floor": 0.0,
+        "alt_ceiling": 500.0,
         "severity": "CRITICAL",
         "color": "#ff2a2a",
         "fill_color": "rgba(255, 42, 42, 0.15)"
     },
     "BUFFER": {
         "radius": 2000.0,
+        "alt_floor": 0.0,
+        "alt_ceiling": 1000.0,
         "severity": "MEDIUM",
         "color": "#ff9f1a",
         "fill_color": "rgba(255, 159, 26, 0.1)"
     },
     "MONITORED": {
         "radius": 3000.0,
+        "alt_floor": 0.0,
+        "alt_ceiling": 2000.0,
         "severity": "LOW",
         "color": "#fff200",
         "fill_color": "rgba(255, 242, 0, 0.05)"

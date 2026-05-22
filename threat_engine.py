@@ -97,6 +97,10 @@ class ThreatEngine:
         state = self._get_state(d_id)
         # ---- 0. Deterministic Kinematic Rules (Replaces ML) ----------------
         MAX_KINEMATIC_SPEED_MPS = 30.0  # e.g., 108 km/h is highly suspicious
+        MAX_DIVE_SPEED_MPS = -5.0       # fast descent
+
+        v_vertical = getattr(drone.kf, 'estimated_vertical_speed_mps', 0.0)
+
         if speed > MAX_KINEMATIC_SPEED_MPS and (ts - state["kinematic_alert_cooldown"] > 10.0):
             self._add_alert(
                 drone_id=d_id,
@@ -107,10 +111,21 @@ class ThreatEngine:
                 speed=speed, alt=alt,
             )
             state["kinematic_alert_cooldown"] = ts
+        
+        elif v_vertical < MAX_DIVE_SPEED_MPS and (ts - state["kinematic_alert_cooldown"] > 10.0):
+            self._add_alert(
+                drone_id=d_id,
+                zone_breached="N/A",
+                threat_type="HOSTILE_DIVE",
+                severity="CRITICAL",
+                lat=lat, lon=lon,
+                speed=speed, alt=alt,
+            )
+            state["kinematic_alert_cooldown"] = ts
 
         # Use the expanding covariance bound from the Kalman filter for pessimistic collision checking
         r_uncert = getattr(drone, 'uncertainty_radius_m', 0.0)
-        curr_zones = set(geofence_manager.get_containing_zones(easting, northing, radius_m=r_uncert))
+        curr_zones = set(geofence_manager.get_containing_zones(easting, northing, alt=alt, radius_m=r_uncert))
 
         # ---- 1. Loitering detection (Time-based) ---------------------------
         min_dist, closest_zone = geofence_manager.get_closest_boundary(easting, northing, radius_m=r_uncert)

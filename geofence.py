@@ -43,23 +43,28 @@ class GeofenceManager:
             # buffer creates a circle in the Cartesian plane
             self.zone_polygons[zone_name] = self.center_point.buffer(radius_m, resolution=64)
 
-    def get_containing_zones(self, easting: float, northing: float, radius_m: float = 0.0) -> list[str]:
+    def get_containing_zones(self, easting: float, northing: float, alt: float, radius_m: float = 0.0) -> list[str]:
         """
-        Return zone names that contain the given position, accounting for uncertainty.
+        Return zone names that contain the given position (including altitude),
+        accounting for uncertainty in 2D.
         Ordered from highest severity to lowest.
         """
         point = shapely.geometry.Point(easting, northing)
-        if radius_m > 0:
-            shape = point.buffer(radius_m)
-            return [
-                z for z in ["EXCLUSION", "BUFFER", "MONITORED"]
-                if z in self.zone_polygons and self.zone_polygons[z].intersects(shape)
-            ]
-        else:
-            return [
-                z for z in ["EXCLUSION", "BUFFER", "MONITORED"]
-                if z in self.zone_polygons and self.zone_polygons[z].contains(point)
-            ]
+        shape = point.buffer(radius_m) if radius_m > 0 else point
+        
+        contained = []
+        for z in ["EXCLUSION", "BUFFER", "MONITORED"]:
+            if z in self.zone_polygons:
+                props = ZONES[z]
+                # Altitude check
+                if alt < props["alt_floor"] or alt > props["alt_ceiling"]:
+                    continue
+                # 2D Intersection check
+                if radius_m > 0 and self.zone_polygons[z].intersects(shape):
+                    contained.append(z)
+                elif radius_m == 0 and self.zone_polygons[z].contains(point):
+                    contained.append(z)
+        return contained
 
     def get_distance_to_boundary_m(self, easting: float, northing: float, zone_name: str) -> float:
         """

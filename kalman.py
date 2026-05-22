@@ -42,15 +42,17 @@
 
 import numpy as np
 
-class KalmanFilter2D:
+class KalmanFilter6D:
     """
-    Constant-velocity Kalman filter tracking a single UAV in 2D (Easting, Northing).
-    Operates strictly in Cartesian meters (e.g., UTM projection).
+    Constant-velocity Kalman filter tracking a single UAV in 3D (Easting, Northing, Altitude).
+    Operates strictly in Cartesian meters.
     """
-    def __init__(self, init_easting: float, init_northing: float):
+    def __init__(self, init_easting: float, init_northing: float, init_alt: float = 0.0):
+        # 3x6 Observation Matrix: We measure [e, n, alt], but not velocities
         self.H = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
+            [1, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0],
         ], dtype=float)
 
         # Process noise variance (acceleration variance m^2/s^4)
@@ -58,22 +60,27 @@ class KalmanFilter2D:
         self.sa2 = sigma_a**2
 
         # Measurement noise covariance (GPS error in meters)
-        # Standard deviation e.g. 2.0 meters
+        # We will override this dynamically in Phase 2, but provide a default for now.
         gps_noise_std = 2.0
-        self.R = np.diag([gps_noise_std**2, gps_noise_std**2])
+        self.R = np.diag([gps_noise_std**2, gps_noise_std**2, gps_noise_std**2])
 
-        self.x = np.array([init_easting, init_northing, 0.0, 0.0], dtype=float)
-        self.P = np.eye(4) * 1e-4
+        # State vector: [e, n, alt, ve, vn, va]
+        self.x = np.array([init_easting, init_northing, init_alt, 0.0, 0.0, 0.0], dtype=float)
+        
+        # Initial covariance P: highly uncertain initial state
+        self.P = np.eye(6) * 100.0
 
     def predict(self, dt: float) -> None:
         """Propagate state forward using the motion model."""
         if dt <= 0: return
 
-        F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1,  0],
-            [0, 0, 0,  1],
+        self.F = np.array([
+            [1, 0, 0, dt, 0,  0 ],
+            [0, 1, 0, 0,  dt, 0 ],
+            [0, 0, 1, 0,  0,  dt],
+            [0, 0, 0, 1,  0,  0 ],
+            [0, 0, 0, 0,  1,  0 ],
+            [0, 0, 0, 0,  0,  1 ],
         ], dtype=float)
 
         # Q cross-terms correctly couple position and velocity uncertainty
@@ -82,53 +89,72 @@ class KalmanFilter2D:
         q_vel = dt**2 * self.sa2
 
         Q = np.array([
-            [q_pos, 0,     q_cov, 0    ],
-            [0,     q_pos, 0,     q_cov],
-            [q_cov, 0,     q_vel, 0    ],
-            [0,     q_cov, 0,     q_vel],
+            [q_pos, 0,     0,     q_cov, 0,     0    ],
+            [0,     q_pos, 0,     0,     q_cov, 0    ],
+            [0,     0,     q_pos, 0,     0,     q_cov],
+            [q_cov, 0,     0,     q_vel, 0,     0    ],
+            [0,     q_cov, 0,     0,     q_vel, 0    ],
+            [0,     0,     q_cov, 0,     0,     q_vel],
         ])
 
-        self.x = F @ self.x
-        self.P = F @ self.P @ F.T + Q
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + Q
 
-    def update(self, easting_meas: float, northing_meas: float) -> None:
+    def compute_mahalanobis_distance(self, easting_meas: float, northing_meas: float, alt_meas: float, noise_std_m: float) -> float:
+        """Calculate Mahalanobis distance of a measurement from the predicted state."""
+        R = np.diag([noise_std_m**2, noise_std_m**2, noise_std_m**2])
+        z = np.array([easting_meas, northing_meas, alt_meas])
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + R
+        return float(np.sqrt(y.T @ np.linalg.inv(S) @ y))
+
+    def update(self, easting_meas: float, northing_meas: float, alt_meas: float, noise_std_m: float = 2.0) -> None:
         """Correct state estimate using Joseph form."""
-        z = np.array([easting_meas, northing_meas])
+        self.R = np.diag([noise_std_m**2, noise_std_m**2, noise_std_m**2])
+        
+        z = np.array([easting_meas, northing_meas, alt_meas])
         y = z - self.H @ self.x
         S = self.H @ self.P @ self.H.T + self.R
         K = self.P @ self.H.T @ np.linalg.inv(S)
 
         self.x = self.x + K @ y
 
-        I_KH = np.eye(4) - K @ self.H
+        I_KH = np.eye(6) - K @ self.H
         self.P = I_KH @ self.P @ I_KH.T + K @ self.R @ K.T
 
-    def step(self, easting_meas: float, northing_meas: float, dt: float) -> tuple[float, float]:
+    def step(self, easting_meas: float, northing_meas: float, alt_meas: float, dt: float, noise_std_m: float = 2.0) -> tuple[float, float, float]:
         self.predict(dt)
-        self.update(easting_meas, northing_meas)
-        return float(self.x[0]), float(self.x[1])
+        self.update(easting_meas, northing_meas, alt_meas, noise_std_m)
+        return float(self.x[0]), float(self.x[1]), float(self.x[2])
         
-    def project_future(self, steps: int, dt: float) -> list[tuple[float, float]]:
+    def project_future(self, steps: int, dt: float) -> list[tuple[float, float, float]]:
         """
         Phase 3: Trajectory Prediction
         Projects the current state forward 'steps' times without updating covariance.
-        Returns a list of predicted (easting, northing) positions.
+        Returns a list of predicted (easting, northing, altitude) positions.
         """
         F = np.array([
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1,  0],
-            [0, 0, 0,  1],
+            [1, 0, 0, dt, 0,  0 ],
+            [0, 1, 0, 0,  dt, 0 ],
+            [0, 0, 1, 0,  0,  dt],
+            [0, 0, 0, 1,  0,  0 ],
+            [0, 0, 0, 0,  1,  0 ],
+            [0, 0, 0, 0,  0,  1 ],
         ], dtype=float)
         
         future_path = []
         x_proj = self.x.copy()
         for _ in range(steps):
             x_proj = F @ x_proj
-            future_path.append((float(x_proj[0]), float(x_proj[1])))
+            future_path.append((float(x_proj[0]), float(x_proj[1]), float(x_proj[2])))
         return future_path
 
     @property
     def estimated_speed_mps(self) -> float:
-        """Magnitude of velocity estimate in m/s."""
-        return float(np.hypot(self.x[2], self.x[3]))
+        """Magnitude of velocity estimate in m/s (3D)."""
+        return float(np.linalg.norm([self.x[3], self.x[4], self.x[5]]))
+
+    @property
+    def estimated_vertical_speed_mps(self) -> float:
+        """Vertical velocity component (va) in m/s."""
+        return float(self.x[5])

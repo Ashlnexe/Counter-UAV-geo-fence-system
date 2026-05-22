@@ -79,6 +79,7 @@ class TelemetryFrame:
     speed: float = 0.0         # ground speed m/s
     heading: float = 0.0       # degrees, 0 = north
     source: str = "unknown"    # "csv" | "mavlink"
+    noise_std_m: float = 2.0   # sensor-specific measurement noise standard deviation
     received_time: float = 0.0 # set by the adapter thread when pushed to queue
 
 

@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 from data_ingestion import TelemetryFrame
 from adapters.base_adapter import SensorAdapter
-from kalman import KalmanFilter2D
+from kalman import KalmanFilter6D
 import geo_utils
 from threat_engine import threat_engine
 
@@ -28,38 +28,51 @@ class TrackedDrone:
         # Convert initial WGS84 to UTM
         easting, northing = geo_utils.to_utm(frame.lat, frame.lon)
         
-        self.true_path = [(easting, northing)]
-        self.filtered_path = [(easting, northing)]
+        self.true_path = [(easting, northing, frame.alt)]
+        self.filtered_path = [(easting, northing, frame.alt)]
         self.easting = easting
         self.northing = northing
         self.alt = frame.alt
         self.speed = frame.speed
         self.heading = frame.heading
         
-        self.kf = KalmanFilter2D(init_easting=easting, init_northing=northing)
+        self._update_wgs84_cache()
+        self.kf = KalmanFilter6D(init_easting=easting, init_northing=northing, init_alt=frame.alt)
+
+    def _update_wgs84_cache(self):
+        self._lat, self._lon = geo_utils.to_wgs84(self.easting, self.northing)
+        self._true_lat, self._true_lon = geo_utils.to_wgs84(self.true_path[-1][0], self.true_path[-1][1])
 
     def update(self, frame: TelemetryFrame) -> None:
         easting, northing = geo_utils.to_utm(frame.lat, frame.lon)
-        self.true_path.append((easting, northing))
+        self.true_path.append((easting, northing, frame.alt))
         if len(self.true_path) > 100:
             self.true_path.pop(0)
 
         dt = frame.timestamp - self.last_ts
         if dt > 0:
-            filt_e, filt_n = self.kf.step(easting, northing, dt=dt)
+            self.kf.predict(dt)
+            dist = self.kf.compute_mahalanobis_distance(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
+            if dist > 5.0:
+                logger.warning(f"Measurement rejected by Mahalanobis gate: dist={dist:.2f}")
+            else:
+                self.kf.update(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
+            filt_e, filt_n, filt_alt = float(self.kf.x[0]), float(self.kf.x[1]), float(self.kf.x[2])
         else:
-            filt_e, filt_n = self.easting, self.northing
+            filt_e, filt_n, filt_alt = self.easting, self.northing, self.alt
 
         self.last_ts = frame.timestamp
         self.easting = filt_e
         self.northing = filt_n
-        self.filtered_path.append((filt_e, filt_n))
+        self.alt = filt_alt
+        self.filtered_path.append((filt_e, filt_n, filt_alt))
         if len(self.filtered_path) > 100:
             self.filtered_path.pop(0)
 
-        self.alt = frame.alt
+        # We keep the original raw speed and heading for reference, but use KF metrics for threats
         self.speed = frame.speed
         self.heading = frame.heading
+        self._update_wgs84_cache()
 
     def coast(self, current_time: float) -> None:
         """Phase 3: Coasting Logic. Predicts forward without a measurement update."""
@@ -68,30 +81,28 @@ class TrackedDrone:
             self.kf.predict(dt)
             self.easting = float(self.kf.x[0])
             self.northing = float(self.kf.x[1])
+            self.alt = float(self.kf.x[2])
             self.last_ts = current_time
-            self.filtered_path.append((self.easting, self.northing))
+            self.filtered_path.append((self.easting, self.northing, self.alt))
             if len(self.filtered_path) > 100:
                 self.filtered_path.pop(0)
+            self._update_wgs84_cache()
 
     @property
     def lat(self) -> float:
-        lat, _ = geo_utils.to_wgs84(self.easting, self.northing)
-        return lat
+        return self._lat
 
     @property
     def lon(self) -> float:
-        _, lon = geo_utils.to_wgs84(self.easting, self.northing)
-        return lon
+        return self._lon
 
     @property
     def true_lat(self) -> float:
-        lat, _ = geo_utils.to_wgs84(self.true_path[-1][0], self.true_path[-1][1])
-        return lat
+        return self._true_lat
 
     @property
     def true_lon(self) -> float:
-        _, lon = geo_utils.to_wgs84(self.true_path[-1][0], self.true_path[-1][1])
-        return lon
+        return self._true_lon
 
     @property
     def wgs84_filtered_path(self) -> list[tuple[float, float]]:

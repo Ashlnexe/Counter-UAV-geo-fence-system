@@ -35,12 +35,11 @@ class OpenSkyAdapter(SensorAdapter):
         try:
             r = requests.get(self.url, timeout=5)
             r.raise_for_status()
+            self._is_connected = True
             return True
         except Exception as e:
             logger.error(f"OpenSky connection failed: {e}")
-            # Even if the first request fails (e.g. rate limit), we return True
-            # to let the background thread keep trying
-            return True
+            return False
 
     def disconnect(self) -> None:
         pass
