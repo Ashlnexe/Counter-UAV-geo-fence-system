@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 from data_ingestion import TelemetryFrame
 from adapters.base_adapter import SensorAdapter
-from kalman import KalmanFilter6D
+from counter_uav_core import KalmanFilter6D
 import geo_utils
 from threat_engine import threat_engine
 
@@ -36,8 +36,18 @@ class TrackedDrone:
         self.speed = frame.speed
         self.heading = frame.heading
         
+        # Track lifecycle properties
+        self.hits = 1
+        self.is_confirmed = False
+        
+        # Dynamic inception
+        base_window = 30.0 if frame.source == "opensky" else 5.0
+        self.promotion_deadline = frame.timestamp + base_window
+        
         self._update_wgs84_cache()
         self.kf = KalmanFilter6D(init_easting=easting, init_northing=northing, init_alt=frame.alt)
+        # Seed initial state in the OOSM buffer
+        self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, frame.timestamp)
 
     def _update_wgs84_cache(self):
         self._lat, self._lon = geo_utils.to_wgs84(self.easting, self.northing)
@@ -49,30 +59,32 @@ class TrackedDrone:
         if len(self.true_path) > 100:
             self.true_path.pop(0)
 
-        dt = frame.timestamp - self.last_ts
-        if dt > 0:
-            self.kf.predict(dt)
-            dist = self.kf.compute_mahalanobis_distance(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
-            # 7.815 is the chi-squared 95% confidence interval for 3 degrees of freedom
-            if dist > 7.815:
-                logger.warning(f"Measurement rejected by Mahalanobis gate: dist={dist:.2f} > 7.815")
-            else:
-                self.kf.update(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
-            filt_e, filt_n, filt_alt = float(self.kf.x[0]), float(self.kf.x[1]), float(self.kf.x[2])
-        else:
-            filt_e, filt_n, filt_alt = self.easting, self.northing, self.alt
-
-        self.last_ts = frame.timestamp
-        self.easting = filt_e
-        self.northing = filt_n
-        self.alt = filt_alt
-        self.filtered_path.append((filt_e, filt_n, filt_alt))
+        self.hits += 1
+        
+        # Sensor-dominant inheritance
+        current_time = time.time()
+        if frame.source == "opensky":
+            self.promotion_deadline = max(self.promotion_deadline, current_time + 30.0)
+        
+        
+        # OOSM Kalman Filter update
+        self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, current_time)
+        
+        self.easting = self.kf.x[0]
+        self.northing = self.kf.x[1]
+        self.alt = self.kf.x[2]
+        
+        if self.hits >= 3 and current_time <= self.promotion_deadline and not self.is_confirmed:
+            self.is_confirmed = True
+            logger.info(f"Track {self.id} PROMOTED to ConfirmedTrack.")
+            
+        self.last_ts = max(self.last_ts, frame.timestamp)
+        self.speed = self.kf.estimated_speed_mps
+        
+        self.filtered_path.append((self.easting, self.northing, self.alt))
         if len(self.filtered_path) > 100:
             self.filtered_path.pop(0)
-
-        # We keep the original raw speed and heading for reference, but use KF metrics for threats
-        self.speed = frame.speed
-        self.heading = frame.heading
+            
         self._update_wgs84_cache()
 
     def coast(self, current_time: float) -> None:
@@ -173,25 +185,58 @@ class TrackingEngine:
             # 3. Evaluate threats exactly ONCE per batch cycle
             with self.lock:
                 now = time.time()
-                for drone in self.drones.values():
-                    # Phase 3 Coasting: Predict forward if no data received recently
-                    # We coast if it's been more than 1.5s (to avoid jitter with 0.5s sim steps).
-                    if now - drone.last_ts > 1.5:
-                        drone.coast(now)
-                        
-                threat_engine.process_step(list(self.drones.values()))
+                
+                # Cull ghost tracks that missed their promotion deadline
+                dead_tracks = [d_id for d_id, d in self.drones.items() if not d.is_confirmed and now > d.promotion_deadline]
+                for d_id in dead_tracks:
+                    del self.drones[d_id]
+                    logger.debug(f"Ghost track {d_id} culled.")
+
+                if self.drones:
+                    for drone in list(self.drones.values()):
+                        # We coast if it's been more than 1.5s (to avoid jitter with 0.5s sim steps).
+                        if now - drone.last_ts > 1.5:
+                            drone.coast(now)
+                            
+                    # Threat engine only processes confirmed tracks
+                    confirmed_drones = [d for d in self.drones.values() if d.is_confirmed]
+                    threat_engine.process_step(confirmed_drones)
 
     def _process_frame(self, frame: TelemetryFrame) -> None:
         with self.lock:
-            if frame.drone_id not in self.drones:
-                self.drones[frame.drone_id] = TrackedDrone(frame)
+            # Drop very old packets before doing distance checks
+            now = time.time()
+            if frame.timestamp < now - 15.0:
+                return
+
+            easting, northing = geo_utils.to_utm(frame.lat, frame.lon)
+            
+            best_drone = None
+            best_dist = float('inf')
+            
+            for drone in self.drones.values():
+                # Don't associate if packet is hopelessly old (>15s), the OOSM buffer only goes back 15s
+                if frame.timestamp < now - 15.0:
+                    continue
+                    
+                dist = drone.kf.compute_mahalanobis_oosm(
+                    easting, northing, frame.alt, frame.timestamp, frame.noise_std_m
+                )
+                
+                # Chi-squared 95% confidence interval for 3 DOF = 7.815
+                if dist < 7.815 and dist < best_dist:
+                    best_dist = dist
+                    best_drone = drone
+                    
+            if best_drone is not None:
+                best_drone.update(frame)
             else:
-                drone = self.drones[frame.drone_id]
-                # Drop out-of-order packets
-                if frame.timestamp < drone.last_ts:
-                    logger.warning(f"Dropping out of order packet for {frame.drone_id}")
-                    return
-                drone.update(frame)
+                # No track within Mahalanobis gate, spawn new TentativeTrack
+                # Assign a synthetic ID based on the frame timestamp if not from a reliable radar
+                new_id = frame.drone_id if frame.drone_id.startswith("UAV-") else f"TRK-{int(frame.timestamp*1000)}"
+                frame.drone_id = new_id
+                self.drones[new_id] = TrackedDrone(frame)
+                logger.info(f"Spawned new TentativeTrack: {new_id} at dist {best_dist:.2f}")
 
     def get_state(self) -> Dict[str, Any]:
         """Snapshot of system state for the dashboard."""
@@ -212,7 +257,7 @@ class TrackingEngine:
                         "path": d.wgs84_filtered_path,
                         "true_path": d.wgs84_true_path,
                     }
-                    for d in self.drones.values()
+                    for d in self.drones.values() if d.is_confirmed
                 ],
                 "alerts": list(threat_engine.alerts)
             }

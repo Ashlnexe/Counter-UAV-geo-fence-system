@@ -1,81 +1,57 @@
 # =============================================================================
 # geofence.py — Geometric zone management for Counter-UAV system
 # =============================================================================
-#
-# Zones are modelled as circles in geographic space. Because 1° of longitude
-# is shorter than 1° of latitude at non-equatorial latitudes, we must use
-# separate conversion factors per axis — otherwise the "circles" become
-# ellipses and boundary distances are wrong.
-#
-# We handle this by working in a locally-flat Cartesian frame (metres),
-# building Shapely polygons there, then converting back to degrees for
-# Plotly rendering. This gives correct geometry without requiring a full
-# projected CRS dependency.
-# =============================================================================
 
 import math
 import shapely.geometry
-
 from config import BASE_LAT, BASE_LON, ZONES
 import geo_utils
-
+import counter_uav_core
 
 class GeofenceManager:
     """
     Manages concentric geo-fence zones and exposes spatial queries.
-    All internal geometry and queries operate in UTM Cartesian meters.
-    Converts back to WGS84 solely for UI rendering.
+    Uses C++ GeofenceEngine for ultra-fast 3D ellipsoid-to-cylinder intersections.
     """
-
     def __init__(self):
-        # Ensure projection is initialized
         geo_utils.init_projection(BASE_LAT, BASE_LON)
-        center_e, center_n = geo_utils.to_utm(BASE_LAT, BASE_LON)
-        self.center_point = shapely.geometry.Point(center_e, center_n)
+        self.center_e, self.center_n = geo_utils.to_utm(BASE_LAT, BASE_LON)
+        self.cpp_engine = counter_uav_core.GeofenceEngine()
         
-        self.zone_polygons: dict[str, shapely.geometry.Polygon] = {}
+        self.zone_polygons = {}
         self._init_zones()
 
     def _init_zones(self) -> None:
-        """Build perfect circles in the Cartesian plane."""
+        """Build perfect circles in the Cartesian plane for Plotly, and load them into C++."""
         for zone_name, props in ZONES.items():
             radius_m = props["radius"]
-            # buffer creates a circle in the Cartesian plane
-            self.zone_polygons[zone_name] = self.center_point.buffer(radius_m, resolution=64)
+            # Still keep shapely for Plotly mapping exterior generation
+            center_point = shapely.geometry.Point(self.center_e, self.center_n)
+            self.zone_polygons[zone_name] = center_point.buffer(radius_m, resolution=64)
+            
+            self.cpp_engine.add_zone(
+                zone_name, 
+                self.center_e, 
+                self.center_n, 
+                radius_m, 
+                props["alt_floor"], 
+                props["alt_ceiling"]
+            )
 
-    def get_containing_zones(self, easting: float, northing: float, alt: float, radius_m: float = 0.0) -> list[str]:
+    def get_containing_zones(self, drone_id: str, easting: float, northing: float, alt: float, P) -> list[str]:
         """
-        Return zone names that contain the given position (including altitude),
-        accounting for uncertainty in 2D.
-        Ordered from highest severity to lowest.
+        Return zone names that contain the 3D uncertainty ellipsoid of the given position.
+        Delegates completely to C++.
         """
-        point = shapely.geometry.Point(easting, northing)
-        shape = point.buffer(radius_m) if radius_m > 0 else point
-        
-        contained = []
-        for z in ["EXCLUSION", "BUFFER", "MONITORED"]:
-            if z in self.zone_polygons:
-                props = ZONES[z]
-                # Altitude check
-                if alt < props["alt_floor"] or alt > props["alt_ceiling"]:
-                    continue
-                # 2D Intersection check
-                if radius_m > 0 and self.zone_polygons[z].intersects(shape):
-                    contained.append(z)
-                elif radius_m == 0 and self.zone_polygons[z].contains(point):
-                    contained.append(z)
-        return contained
+        # Call C++ Geofence Engine directly
+        return self.cpp_engine.check_breaches(drone_id, easting, northing, alt, P)
 
     def get_distance_to_boundary_m(self, easting: float, northing: float, zone_name: str) -> float:
-        """
-        Return the exact Cartesian distance in metres from the point to a zone boundary.
-        """
         point = shapely.geometry.Point(easting, northing)
         poly = self.zone_polygons[zone_name]
         return point.distance(poly.boundary)
 
     def get_closest_boundary(self, easting: float, northing: float, radius_m: float = 0.0) -> tuple[float, str]:
-        """Return (min_distance_m, closest_zone_name), taking into account uncertainty radius."""
         point = shapely.geometry.Point(easting, northing)
         shape = point.buffer(radius_m) if radius_m > 0 else point
         
@@ -91,16 +67,10 @@ class GeofenceManager:
         return min_dist_m, closest_zone
 
     def get_mapbox_layers(self) -> list[dict]:
-        """
-        Generate Plotly Dash mapbox layer specs for all zones.
-        Converts internal UTM Cartesian coordinates back to WGS84 for mapping.
-        """
         layers = []
         for zone_name in ["MONITORED", "BUFFER", "EXCLUSION"]:
             props = ZONES[zone_name]
             poly = self.zone_polygons[zone_name]
-            
-            # Convert UTM boundary coordinates back to WGS84 (lon, lat) for Plotly GeoJSON
             coords = []
             for e, n in poly.exterior.coords:
                 lat, lon = geo_utils.to_wgs84(e, n)
