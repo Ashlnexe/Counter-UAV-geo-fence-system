@@ -53,8 +53,9 @@ class TrackedDrone:
         if dt > 0:
             self.kf.predict(dt)
             dist = self.kf.compute_mahalanobis_distance(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
-            if dist > 5.0:
-                logger.warning(f"Measurement rejected by Mahalanobis gate: dist={dist:.2f}")
+            # 7.815 is the chi-squared 95% confidence interval for 3 degrees of freedom
+            if dist > 7.815:
+                logger.warning(f"Measurement rejected by Mahalanobis gate: dist={dist:.2f} > 7.815")
             else:
                 self.kf.update(easting, northing, frame.alt, noise_std_m=frame.noise_std_m)
             filt_e, filt_n, filt_alt = float(self.kf.x[0]), float(self.kf.x[1]), float(self.kf.x[2])
