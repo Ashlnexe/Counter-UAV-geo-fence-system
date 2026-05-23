@@ -256,6 +256,9 @@ class TrackingEngine:
                         "heading": round(d.heading, 1),
                         "path": d.wgs84_filtered_path,
                         "true_path": d.wgs84_true_path,
+                        "uncertainty_radius_m": round(d.uncertainty_radius_m, 1),
+                        "source": d.source,
+                        "hits": d.hits,
                     }
                     for d in self.drones.values() if d.is_confirmed
                 ],
