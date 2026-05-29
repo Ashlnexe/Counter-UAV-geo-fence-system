@@ -13,6 +13,7 @@ IMMFilter::IMMFilter(double noise_cv, double noise_ca, double meas_noise)
     P_cv = Eigen::MatrixXd::Identity(6, 6) * 500.0; // High initial uncertainty
     P_ca = Eigen::MatrixXd::Identity(6, 6) * 500.0;
     P_out = P_cv;
+    S_out = Eigen::MatrixXd::Identity(2, 2) * 100.0;
 
     // 2. Initialize Transition Matrices to Identity (dt-dependent parts set by updateMatrices)
     F_cv = Eigen::MatrixXd::Identity(6, 6);
@@ -168,4 +169,6 @@ void IMMFilter::update(double z_x, double z_y, double dt) {
     x_out = x_cv * mu(0) + x_ca * mu(1);
     P_out = mu(0) * (P_cv + (x_cv - x_out)*(x_cv - x_out).transpose()) + 
             mu(1) * (P_ca + (x_ca - x_out)*(x_ca - x_out).transpose());
+            
+    S_out = mu(0) * S_cv + mu(1) * S_ca;
 }

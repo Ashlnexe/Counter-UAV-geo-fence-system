@@ -8,6 +8,7 @@ public:
     // Combined output state and covariance
     Eigen::VectorXd x_out; 
     Eigen::MatrixXd P_out; 
+    Eigen::MatrixXd S_out;
 
     // Model probabilities [mu_cv, mu_ca]
     Eigen::VectorXd mu;    

@@ -4,6 +4,7 @@ from typing import List, Any
 class IMMFilter:
     x_out: np.ndarray
     P_out: np.ndarray
+    S_out: np.ndarray
     mu: np.ndarray
 
     def __init__(self, noise_cv: float, noise_ca: float, meas_noise: float) -> None: ...

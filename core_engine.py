@@ -5,9 +5,11 @@ import math
 import time
 from typing import Dict, List, Any
 
+import numpy as np
+
 from data_ingestion import TelemetryFrame
 from adapters.base_adapter import SensorAdapter
-from counter_uav_core import KalmanFilter6D, IMMFilter
+from counter_uav_core import IMMFilter
 import geo_utils
 from threat_engine import threat_engine
 
@@ -49,10 +51,6 @@ class TrackedDrone:
         # IMM Filter for position/velocity estimation (2D: easting/northing)
         self.imm = IMMFilter(noise_cv=0.01, noise_ca=10.0, meas_noise=3.0)
 
-        # Legacy KalmanFilter6D retained ONLY for OOSM Mahalanobis gating
-        self.kf = KalmanFilter6D(init_easting=easting, init_northing=northing, init_alt=frame.alt)
-        self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, frame.timestamp)
-
     def _update_wgs84_cache(self):
         self._lat, self._lon = geo_utils.to_wgs84(self.easting, self.northing)
         self._true_lat, self._true_lon = geo_utils.to_wgs84(self.true_path[-1][0], self.true_path[-1][1])
@@ -65,14 +63,11 @@ class TrackedDrone:
 
         self.hits += 1
         
+        
         # Sensor-dominant inheritance
         current_time = time.time()
         if frame.source == "opensky":
             self.promotion_deadline = max(self.promotion_deadline, current_time + 30.0)
-        
-        
-        # Update OOSM gating filter (for track association only)
-        self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, current_time)
 
         # IMM Filter update with dynamic dt
         dt = frame.timestamp - self.last_ts
@@ -104,7 +99,6 @@ class TrackedDrone:
         dt = current_time - self.last_ts
         if dt > 0:
             self.imm.predict(dt)
-            self.kf.predict(dt)  # Keep gating filter in sync
             self.easting = float(self.imm.x_out[0])
             self.northing = float(self.imm.x_out[1])
             # alt unchanged during coast (no altitude model)
@@ -234,12 +228,14 @@ class TrackingEngine:
                 if frame.timestamp < now - 15.0:
                     continue
                     
-                dist = drone.kf.compute_mahalanobis_oosm(
-                    easting, northing, frame.alt, frame.timestamp, frame.noise_std_m
-                )
+                # Compute Mahalanobis distance using IMM's combined innovation covariance
+                residual = np.array([easting - drone.imm.x_out[0], northing - drone.imm.x_out[1]])
+                # We use S_out for the uncertainty of the prediction
+                S_inv = np.linalg.inv(drone.imm.S_out)
+                dist = np.sqrt(residual.T @ S_inv @ residual)
                 
-                # Chi-squared 95% confidence interval for 3 DOF = 7.815
-                if dist < 7.815 and dist < best_dist:
+                # Chi-squared 95% confidence interval for 2 DOF (2D gating) = 5.991
+                if dist < 5.991 and dist < best_dist:
                     best_dist = dist
                     best_drone = drone
                     

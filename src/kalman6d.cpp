@@ -281,6 +281,7 @@ PYBIND11_MODULE(counter_uav_core, m) {
         .def("update", &IMMFilter::update, py::arg("z_x"), py::arg("z_y"), py::arg("dt"))
         .def_readonly("x_out", &IMMFilter::x_out)
         .def_readonly("P_out", &IMMFilter::P_out)
+        .def_readonly("S_out", &IMMFilter::S_out)
         .def_readonly("mu", &IMMFilter::mu);
 
     // --- GeofenceEngine ---
