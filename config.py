@@ -61,6 +61,15 @@ ZONES = {
     }
 }
 
+# The physical footprint of the asset we are protecting (Polygon CPA Target)
+# Defined as [Latitude, Longitude] vertices
+ASSET_POLYGON = [
+    [BASE_LAT + 0.002, BASE_LON - 0.002], # NW corner
+    [BASE_LAT + 0.002, BASE_LON + 0.002], # NE corner
+    [BASE_LAT - 0.002, BASE_LON + 0.002], # SE corner
+    [BASE_LAT - 0.002, BASE_LON - 0.002], # SW corner
+]
+
 # -----------------------------------------------------------------------------
 # Threat classification thresholds
 # -----------------------------------------------------------------------------
