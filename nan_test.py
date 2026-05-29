@@ -19,7 +19,7 @@ def run_stress_test():
     print("P matrix:")
     print(kf.P)
     
-    breaches = engine.check_breaches(0.0, 0.0, 50.0, kf.P)
+    breaches = engine.check_breaches("TEST_DRONE", 0.0, 0.0, 50.0, kf.P)
     print("Breaches:", breaches)
 
 if __name__ == "__main__":

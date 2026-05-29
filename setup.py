@@ -49,10 +49,11 @@ except ImportError:
 # ---------------------------------------------------------------------------
 ext = Extension(
     name="counter_uav_core",
-    sources=[os.path.join("src", "kalman6d.cpp")],
+    sources=[os.path.join("src", "kalman6d.cpp"), os.path.join("src", "imm_filter.cpp")],
     include_dirs=[
         pybind11_includes,
         EIGEN_INCLUDE,
+        os.path.join(os.path.dirname(__file__), "src"),
     ],
     language="c++",
     extra_compile_args=(

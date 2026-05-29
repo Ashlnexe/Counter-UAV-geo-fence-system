@@ -1,5 +1,5 @@
 // =============================================================================
-// kalman6d.cpp — 6D Constant-Velocity Kalman Filter (C++ / Eigen3)
+// kalman6d.cpp — C++ Core for Counter-UAV Tracking Engine
 // =============================================================================
 
 #include <pybind11/pybind11.h>
@@ -18,10 +18,16 @@
 #include <set>
 #include <string>
 
+#include "imm_filter.h"
+
 namespace py = pybind11;
 
+// =============================================================================
+// KalmanFilter6D — Legacy 6D Constant-Velocity filter (retained for compat)
+// =============================================================================
+
 struct KFState {
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW // Mandatory for fixed-size Eigen members
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
     double timestamp;
     Eigen::Vector<double, 6> x;
     Eigen::Matrix<double, 6, 6> P;
@@ -45,7 +51,6 @@ public:
     double sa2;
     double last_time;
 
-    // Mandatory custom allocator for STL containers holding Eigen types
     std::deque<KFState, Eigen::aligned_allocator<KFState>> state_history;
     std::deque<Measurement> meas_history;
 
@@ -201,6 +206,10 @@ public:
     Eigen::Matrix<double, 6, 6> get_P() const { return P; }
 };
 
+// =============================================================================
+// GeofenceEngine — 3D cylinder zone checking with Schmitt trigger hysteresis
+// =============================================================================
+
 struct CylinderZone {
     std::string name;
     double center_easting;
@@ -213,10 +222,8 @@ struct CylinderZone {
 class GeofenceEngine {
 private:
     std::vector<CylinderZone> zones;
-    
-    // Persistent state for Spatial Hysteresis (Schmitt Trigger)
     std::map<std::string, std::set<std::string>> active_breaches;
-    const double SCHMITT_BUFFER_M = 20.0; // 20-meter release buffer
+    const double SCHMITT_BUFFER_M = 20.0;
 
 public:
     void add_zone(std::string name, double e, double n, double r, double floor, double ceil) {
@@ -226,24 +233,21 @@ public:
     std::vector<std::string> check_breaches(std::string drone_id, double easting, double northing, double alt, Eigen::Matrix<double, 6, 6> P) {
         std::vector<std::string> current_breaches;
         
-        // 1. Defend against matrix collapse (Artificial Inflation)
         double var_z = std::max(P(2,2), 1.0); 
         double z_bound = 3.0 * std::sqrt(var_z);
 
         Eigen::Matrix2d Pxy = P.block<2,2>(0,0);
         Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigensolver(Pxy);
         
-        // Clamp eigenvalue to prevent division by zero / cloaking
         double lambda_max = std::max(eigensolver.eigenvalues().maxCoeff(), 1.0);
         double uncertainty_radius = 3.0 * std::sqrt(lambda_max);
 
         for (const auto& zone : zones) {
             bool currently_breached = active_breaches[drone_id].count(zone.name) > 0;
             
-            // 2. The Spatial Schmitt Trigger
             double effective_radius = zone.radius + uncertainty_radius;
             if (currently_breached) {
-                effective_radius += SCHMITT_BUFFER_M; // Require an extra 20m of retreat to clear the alert
+                effective_radius += SCHMITT_BUFFER_M;
             }
 
             bool alt_breach = (alt + z_bound >= zone.alt_floor) && (alt - z_bound <= zone.alt_ceiling);
@@ -257,20 +261,35 @@ public:
             }
         }
         
-        // Update persistent state
         active_breaches[drone_id] = std::set<std::string>(current_breaches.begin(), current_breaches.end());
         return current_breaches;
     }
 };
 
-PYBIND11_MODULE(counter_uav_core, m) {
-    m.doc() = "C++ core for Counter-UAV: 6D Kalman Filter with Eigen3";
+// =============================================================================
+// Pybind11 Module — Exposes IMMFilter, KalmanFilter6D, GeofenceEngine
+// =============================================================================
 
+PYBIND11_MODULE(counter_uav_core, m) {
+    m.doc() = "C++ Core for Counter-UAV Tracking Engine";
+
+    // --- IMM Filter ---
+    py::class_<IMMFilter>(m, "IMMFilter")
+        .def(py::init<double, double, double>(), 
+             py::arg("noise_cv"), py::arg("noise_ca"), py::arg("meas_noise"))
+        .def("predict", &IMMFilter::predict, py::arg("dt"))
+        .def("update", &IMMFilter::update, py::arg("z_x"), py::arg("z_y"), py::arg("dt"))
+        .def_readonly("x_out", &IMMFilter::x_out)
+        .def_readonly("P_out", &IMMFilter::P_out)
+        .def_readonly("mu", &IMMFilter::mu);
+
+    // --- GeofenceEngine ---
     py::class_<GeofenceEngine>(m, "GeofenceEngine")
         .def(py::init<>())
         .def("add_zone", &GeofenceEngine::add_zone)
         .def("check_breaches", &GeofenceEngine::check_breaches);
 
+    // --- Legacy KalmanFilter6D ---
     py::class_<KalmanFilter6D>(m, "KalmanFilter6D")
         .def(py::init<double, double, double>(),
              py::arg("init_easting"), py::arg("init_northing"), py::arg("init_alt") = 0.0)

@@ -6,6 +6,7 @@
 
 import os
 import math
+import time
 
 from dash import Dash, html, dcc, Input, Output, clientside_callback
 import plotly.graph_objects as go
@@ -400,7 +401,7 @@ app.layout = html.Div(
         html.Div(id="drone-cards",
                  style={"display": "flex", "gap": "8px", "flexWrap": "wrap"}),
 
-        dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
+        dcc.Interval(id="live-interval", interval=500, n_intervals=0),
     ]
 )
 
@@ -427,6 +428,29 @@ clientside_callback(
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_map(drones):
     fig = go.Figure()
+
+    # --- RADAR BACKGROUND ---
+    # 1. Range Rings (500m, 1000m, 2000m)
+    for r in [500, 1000, 2000]:
+        rlats, rlons = _circle(BASE_LAT, BASE_LON, r, n=60)
+        fig.add_trace(go.Scattermapbox(
+            mode="lines", lat=rlats, lon=rlons,
+            line=dict(width=1, color="#ffffff"),
+            opacity=0.25, hoverinfo="none", showlegend=False
+        ))
+
+    # 2. Crosshairs
+    d_lat = 2500 / 110570.0
+    d_lon = 2500 / (111320.0 * math.cos(math.radians(BASE_LAT)))
+    fig.add_trace(go.Scattermapbox(
+        mode="lines",
+        lat=[BASE_LAT - d_lat, BASE_LAT + d_lat, None, BASE_LAT, BASE_LAT],
+        lon=[BASE_LON, BASE_LON, None, BASE_LON - d_lon, BASE_LON + d_lon],
+        line=dict(width=1, color="#ffffff"),
+        opacity=0.2, hoverinfo="none", showlegend=False
+    ))
+
+    # --- END RADAR BACKGROUND ---
 
     for d in drones:
         color = DRONE_COLORS.get(d["id"], "#ffffff")
@@ -473,6 +497,15 @@ def _build_map(drones):
 
     # Drone position markers
     if drones:
+        # Glow effect
+        fig.add_trace(go.Scattermapbox(
+            mode="markers",
+            lat=[d["lat"] for d in drones],
+            lon=[d["lon"] for d in drones],
+            marker=dict(size=25, color=[DRONE_COLORS.get(d["id"], "#fff") for d in drones], opacity=0.3),
+            hoverinfo="none", showlegend=False,
+        ))
+        
         fig.add_trace(go.Scattermapbox(
             mode="markers+text",
             lat=[d["lat"] for d in drones],

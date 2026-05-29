@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 from data_ingestion import TelemetryFrame
 from adapters.base_adapter import SensorAdapter
-from counter_uav_core import KalmanFilter6D
+from counter_uav_core import KalmanFilter6D, IMMFilter
 import geo_utils
 from threat_engine import threat_engine
 
@@ -45,8 +45,12 @@ class TrackedDrone:
         self.promotion_deadline = frame.timestamp + base_window
         
         self._update_wgs84_cache()
+
+        # IMM Filter for position/velocity estimation (2D: easting/northing)
+        self.imm = IMMFilter(noise_cv=0.01, noise_ca=10.0, meas_noise=3.0)
+
+        # Legacy KalmanFilter6D retained ONLY for OOSM Mahalanobis gating
         self.kf = KalmanFilter6D(init_easting=easting, init_northing=northing, init_alt=frame.alt)
-        # Seed initial state in the OOSM buffer
         self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, frame.timestamp)
 
     def _update_wgs84_cache(self):
@@ -67,19 +71,27 @@ class TrackedDrone:
             self.promotion_deadline = max(self.promotion_deadline, current_time + 30.0)
         
         
-        # OOSM Kalman Filter update
+        # Update OOSM gating filter (for track association only)
         self.kf.step_oosm(frame.timestamp, easting, northing, frame.alt, frame.noise_std_m, current_time)
+
+        # IMM Filter update with dynamic dt
+        dt = frame.timestamp - self.last_ts
+        if dt > 0:
+            self.imm.update(easting, northing, dt)
         
-        self.easting = self.kf.x[0]
-        self.northing = self.kf.x[1]
-        self.alt = self.kf.x[2]
+        self.easting = float(self.imm.x_out[0])
+        self.northing = float(self.imm.x_out[1])
+        self.alt = frame.alt  # Altitude passed through unfiltered (IMM is 2D)
         
         if self.hits >= 3 and current_time <= self.promotion_deadline and not self.is_confirmed:
             self.is_confirmed = True
             logger.info(f"Track {self.id} PROMOTED to ConfirmedTrack.")
             
         self.last_ts = max(self.last_ts, frame.timestamp)
-        self.speed = self.kf.estimated_speed_mps
+        # Velocity directly from IMM state: x_out = [x, y, vx, vy, ax, ay]
+        vx = float(self.imm.x_out[2])
+        vy = float(self.imm.x_out[3])
+        self.speed = math.sqrt(vx*vx + vy*vy)
         
         self.filtered_path.append((self.easting, self.northing, self.alt))
         if len(self.filtered_path) > 100:
@@ -91,10 +103,11 @@ class TrackedDrone:
         """Phase 3: Coasting Logic. Predicts forward without a measurement update."""
         dt = current_time - self.last_ts
         if dt > 0:
-            self.kf.predict(dt)
-            self.easting = float(self.kf.x[0])
-            self.northing = float(self.kf.x[1])
-            self.alt = float(self.kf.x[2])
+            self.imm.predict(dt)
+            self.kf.predict(dt)  # Keep gating filter in sync
+            self.easting = float(self.imm.x_out[0])
+            self.northing = float(self.imm.x_out[1])
+            # alt unchanged during coast (no altitude model)
             self.last_ts = current_time
             self.filtered_path.append((self.easting, self.northing, self.alt))
             if len(self.filtered_path) > 100:
@@ -119,20 +132,22 @@ class TrackedDrone:
 
     @property
     def wgs84_filtered_path(self) -> list[tuple[float, float]]:
-        return [geo_utils.to_wgs84(e, n) for e, n in self.filtered_path]
+        return [geo_utils.to_wgs84(pt[0], pt[1]) for pt in self.filtered_path]
 
     @property
     def wgs84_true_path(self) -> list[tuple[float, float]]:
-        return [geo_utils.to_wgs84(e, n) for e, n in self.true_path]
+        return [geo_utils.to_wgs84(pt[0], pt[1]) for pt in self.true_path]
 
     @property
     def kalman_speed(self) -> float:
-        return self.kf.estimated_speed_mps
+        vx = float(self.imm.x_out[2])
+        vy = float(self.imm.x_out[3])
+        return math.sqrt(vx*vx + vy*vy)
 
     @property
     def uncertainty_radius_m(self) -> float:
-        # P[0,0] is Easting variance, P[1,1] is Northing variance
-        max_var = max(self.kf.P[0, 0], self.kf.P[1, 1])
+        # P_out[0,0] is Easting variance, P_out[1,1] is Northing variance
+        max_var = max(float(self.imm.P_out[0, 0]), float(self.imm.P_out[1, 1]))
         # Return 3-sigma bound
         return 3.0 * math.sqrt(max(max_var, 0.0))
 

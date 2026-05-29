@@ -27,7 +27,7 @@ def run_stress_test():
             
         kf.step(0.0, 0.0, z_meas, dt=1.0, noise_std_m=noise_std)
         
-        breaches = engine.check_breaches(0.0, 0.0, 50.0, kf.P)
+        breaches = engine.check_breaches("TEST_DRONE", 0.0, 0.0, 50.0, kf.P)
         is_breach = len(breaches) > 0
         alerts.append(is_breach)
         
